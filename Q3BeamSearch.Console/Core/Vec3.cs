@@ -1,0 +1,27 @@
+using System;
+
+namespace Q3BeamSearch
+{
+    // ---------------------- Math helpers ----------------------
+    public struct Vec3
+    {
+        public double X, Y, Z;
+        public Vec3(double x, double y, double z) { X = x; Y = y; Z = z; }
+        public Vec3 Clone() => new Vec3(X, Y, Z);
+        public double Len() => Math.Sqrt(X * X + Y * Y + Z * Z);
+        public void Normalize()
+        {
+            var l = Len();
+            if (l <= 0)
+                return;
+            X /= l;
+            Y /= l;
+            Z /= l;
+        }
+        public double Dot(in Vec3 v) => X * v.X + Y * v.Y + Z * v.Z;
+        public static Vec3 operator +(Vec3 a, Vec3 b) => new Vec3(a.X + b.X, a.Y + b.Y, a.Z + b.Z);
+        public static Vec3 operator -(Vec3 a, Vec3 b) => new Vec3(a.X - b.X, a.Y - b.Y, a.Z - b.Z);
+        public static Vec3 operator *(Vec3 a, double s) => new Vec3(a.X * s, a.Y * s, a.Z * s);
+        public static Vec3 operator /(Vec3 a, double s) => new Vec3(a.X / s, a.Y / s, a.Z / s);
+    }
+}

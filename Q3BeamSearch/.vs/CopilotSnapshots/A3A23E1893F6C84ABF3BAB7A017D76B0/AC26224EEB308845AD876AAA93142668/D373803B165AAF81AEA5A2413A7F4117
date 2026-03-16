@@ -1,0 +1,917 @@
+﻿// Program.cs
+// Quake 3 – 125 FPS Movement Optimizer - Multiple Search Algorithms
+// Defrag (oDFe) VQ3-like movement tuning
+// -----------------------------------------------------------------------------
+// Notes
+// - Physics: friction, ground/air accelerate, gravity, jump impulse.
+// - Flat ground only (z=0). No ramps/steps/clip sliding.
+// - Deterministic at 125 FPS (dt = 1/125).
+namespace Q3BeamSearch
+{
+    // ---------------------- Math helpers ----------------------
+    // Vec3 moved to Core/Vec3.cs
+
+    // ---------------------- Input model ----------------------
+    public struct Input
+    {
+        public sbyte Fwd;      // -1,0,1 (maps to cmd.forwardmove = +/-127)
+        public sbyte Str;      // -1,0,1 (maps to cmd.rightmove = +/-127)
+        public byte Jump;      // 0,1 (press jump)
+        public double YawDeltaDeg;
+    }
+
+    // ---------------------- Player state ----------------------
+    public class PlayerState
+    {
+        public Vec3 Pos = new Vec3(0, 0, 0);
+        public Vec3 Vel = new Vec3(0, 0, 0);
+        public double YawDeg = 0;  // heading around Z
+        public bool OnGround = true;
+
+        public PlayerState Clone() => new PlayerState
+        {
+            Pos = Pos.Clone(),
+            Vel = Vel.Clone(),
+            YawDeg = YawDeg,
+            OnGround = OnGround
+        };
+    }
+
+    // ---------------------- Core physics (flat ground) ----------------------
+    public static class Physics
+    {
+        // Auto bunny-hop: when enabled, jump automatically on landing (Z velocity ~ 0)
+        public static bool AutoBHop = true;
+        // If true, enforce VQ3 air wishspeed cap (30 ups). Set false to allow higher bhop speed growth.
+        public static bool UseAirWishCap = true;
+        // Surface friction scale (1.0 = default ground, <1.0 ≈ slick)
+        public static double FrictionScale = 1.0;
+
+        // PM_CmdScale + wishvel per classic Q3, with Defrag/VQ3 air wishspeed cap
+        public static (Vec3 wishDir, double wishSpeed) CmdWishDir(PlayerState ps, Input input)
+        {
+            // Map digital inputs to Q3 cmd values
+            int fmove = input.Fwd * 127;
+            int smove = input.Str * 127;
+            int umove = 0;
+
+            int max = Math.Max(Math.Abs(fmove), Math.Max(Math.Abs(smove), Math.Abs(umove)));
+            if (max == 0)
+                return (new Vec3(0, 0, 0), 0);
+
+            double total = Math.Sqrt((double)(fmove * fmove + smove * smove + umove * umove));
+            double scale = Q3.SV_MAXSPEED * max / (127.0 * total);
+
+            var yaw = ps.YawDeg * Q3.DEG;
+            double c = Math.Cos(yaw), s = Math.Sin(yaw);
+            var fwd = new Vec3(c, s, 0);
+            var right = new Vec3(-s, c, 0);
+
+            // Build wish velocity in world space
+            var wishVel = (fwd * (fmove * scale)) + (right * (smove * scale));
+
+            // Extract wishdir and wishspeed
+            double wishSpeed = Math.Sqrt(wishVel.X * wishVel.X + wishVel.Y * wishVel.Y);
+            Vec3 wishDir = wishSpeed > 0 ? (wishVel / (wishSpeed == 0 ? 1 : wishSpeed)) : new Vec3(0, 0, 0);
+
+            // Air cap like Q3: cap wishspeed to 30 in air (optional)
+            if (!ps.OnGround && UseAirWishCap && wishSpeed > Q3.AIR_WISHSPEED_CAP)
+                wishSpeed = Q3.AIR_WISHSPEED_CAP;
+
+            return (wishDir, wishSpeed);
+        }
+
+        public static void Friction(PlayerState ps)
+        {
+            if (!ps.OnGround)
+                return;
+            var vel2D = new Vec3(ps.Vel.X, ps.Vel.Y, 0);
+            var speed = Math.Sqrt(vel2D.X * vel2D.X + vel2D.Y * vel2D.Y);
+            if (speed < 1.0)
+            {
+                ps.Vel.X = 0;
+                ps.Vel.Y = 0;
+                return;
+            }
+            var control = Math.Max(speed, Q3.PM_STOPSPEED);
+            var drop = control * Q3.PM_FRICTION * FrictionScale * Q3.DT;
+            var newspeed = Math.Max(0, speed - drop);
+            if (newspeed != speed)
+            {
+                var scale = newspeed / speed;
+                ps.Vel.X *= scale;
+                ps.Vel.Y *= scale; // leave Z
+            }
+        }
+
+        public static void Accelerate(PlayerState ps, in Vec3 wishDir, double wishSpeed, double accel)
+        {
+            var currentSpeed = ps.Vel.Dot(wishDir);
+            var addSpeed = wishSpeed - currentSpeed;
+            if (addSpeed <= 0)
+                return;
+            var accelSpeed = accel * Q3.DT * wishSpeed;
+            if (accelSpeed > addSpeed)
+                accelSpeed = addSpeed;
+            ps.Vel = new Vec3(
+                ps.Vel.X + accelSpeed * wishDir.X,
+                ps.Vel.Y + accelSpeed * wishDir.Y,
+                ps.Vel.Z + accelSpeed * wishDir.Z
+            );
+        }
+
+        public static void ApplyGravity(PlayerState ps)
+        {
+            if (!ps.OnGround)
+            {
+                ps.Vel = new Vec3(ps.Vel.X, ps.Vel.Y, ps.Vel.Z - Q3.SV_GRAVITY * Q3.DT);
+            }
+        }
+
+        public static void Integrate(PlayerState ps)
+        {
+            ps.Pos = ps.Pos + (ps.Vel * Q3.DT);
+            if (ps.Pos.Z <= 0)
+            {
+                ps.Pos = new Vec3(ps.Pos.X, ps.Pos.Y, 0);
+                if (ps.Vel.Z < 0)
+                    ps.Vel = new Vec3(ps.Vel.X, ps.Vel.Y, 0);
+                ps.OnGround = true;
+            }
+            else
+            {
+                ps.OnGround = false;
+            }
+        }
+
+        public static void Step(PlayerState ps, in Input input)
+        {
+            // Apply view yaw first
+            ps.YawDeg += input.YawDeltaDeg;
+
+            // Jump (only if grounded at frame start). If AutoBHop is enabled, auto-jump when landing (Z vel == 0)
+            bool wantJump = input.Jump == 1;
+            if (!wantJump && AutoBHop && ps.OnGround && Math.Abs(ps.Vel.Z) < 1e-9)
+            {
+                wantJump = true;
+            }
+            if (wantJump && ps.OnGround)
+            {
+                ps.OnGround = false;
+                ps.Vel = new Vec3(ps.Vel.X, ps.Vel.Y, Q3.JUMP_VELOCITY);
+            }
+
+            // Ground friction pre-accelerate
+            Friction(ps);
+
+            // Build wishdir/speed with Q3 cmd scaling and air wishspeed cap
+            var (wishDir, wishSpeed) = CmdWishDir(ps, input);
+            var accel = ps.OnGround ? Q3.PM_ACCELERATE : Q3.PM_AIRACCELERATE;
+            if (wishSpeed > 0)
+                Accelerate(ps, wishDir, wishSpeed, accel);
+
+            // Gravity + integrate
+            ApplyGravity(ps);
+            Integrate(ps);
+        }
+
+        public static double EvaluateSequence(double[] parameters, int frames)
+        {
+            var ps = new PlayerState();
+            double totalScore = 0;
+            int paramIndex = 0;
+
+            for (int t = 0; t < frames && paramIndex + 2 < parameters.Length; t++)
+            {
+                // Each frame encoded as: [fwd_str_combo_index, yaw_delta, jump_probability]
+                int comboIdx = Math.Max(0, Math.Min(6, (int)Math.Round(parameters[paramIndex++] * 6)));
+                double yawDelta = Math.Max(-5, Math.Min(5, parameters[paramIndex++] * 10 - 5)); // -5 to +5 degrees
+                double jumpProb = Math.Max(0, Math.Min(1, parameters[paramIndex++]));
+
+                // Combo mapping: 0=W, 1=WD, 2=WA, 3=D, 4=A, 5=none, 6=back
+                var combos = new (sbyte fwd, sbyte str)[] {
+                    (1, 0), (1, 1), (1, -1), (0, 1), (0, -1), (0, 0), (-1, 0)
+                };
+                var (fwd, str) = combos[comboIdx];
+                byte jump = (ps.OnGround && jumpProb > 0.7) ? (byte)1 : (byte)0; // Jump threshold
+
+                var input = new Input { Fwd = fwd, Str = str, Jump = jump, YawDeltaDeg = yawDelta };
+                Step(ps, input);
+
+                // Fitness: distance + speed bonus - penalize excessive turning
+                totalScore += ps.Pos.X + 0.5 * ps.Vel.Len() - 0.1 * Math.Abs(yawDelta);
+            }
+            return totalScore;
+        }
+    }
+
+    // ---------------------- Strafe guidance (δopt steering) ----------------------
+    public static class StrafeGuidance
+    {
+        private static double Rad2Deg(double r) => r * (180.0 / Math.PI);
+        private static double NormalizeDeg(double a)
+        {
+            a %= 360.0;
+            if (a <= -180) a += 360;
+            else if (a > 180) a -= 360;
+            return a;
+        }
+        private static double ShortestDeltaDeg(double from, double to) => NormalizeDeg(to - from);
+
+        // Compute yaw delta to steer wishdir to δopt relative to current velocity
+        public static double YawDeltaToDOpt(PlayerState ps, sbyte fwd, sbyte str, double maxYawStepDeg)
+        {
+            // Clone state to get vf after friction without mutating input ps
+            var tmp = ps.Clone();
+            Physics.Friction(tmp);
+            double vfx = tmp.Vel.X, vfy = tmp.Vel.Y;
+            double vf = Math.Sqrt(vfx * vfx + vfy * vfy);
+            if (vf < 1e-6)
+                return 0;
+
+            // Compute wishspeed s for these keys at current yaw
+            var inputForWish = new Input { Fwd = fwd, Str = str, Jump = 0, YawDeltaDeg = 0 };
+            var (_, s) = Physics.CmdWishDir(ps, inputForWish);
+
+            // Accel magnitude this frame
+            double accel = ps.OnGround ? Q3.PM_ACCELERATE : Q3.PM_AIRACCELERATE;
+            double a = accel * Q3.DT * s;
+
+            // δopt = acos((s - a)/vf)
+            double x = (s - a) / Math.Max(vf, 1e-9);
+            x = Math.Max(-1.0, Math.Min(1.0, x));
+            double dOptDeg = Rad2Deg(Math.Acos(x));
+
+            int side = Math.Sign(str);
+            if (side == 0) side = 1; // default to right
+
+            // Target wishdir world angle = vel angle ± δopt
+            double velAngDeg = Rad2Deg(Math.Atan2(vfy, vfx));
+
+            double targetWishDirDeg = velAngDeg + side * dOptDeg;
+
+            // Wishdir relative to yaw for digital keys: atan2(str, fwd)
+            double offsetDeg = Rad2Deg(Math.Atan2(str, fwd == 0 ? 1e-6 : (double)fwd));
+            double desiredYawDeg = targetWishDirDeg - offsetDeg;
+
+            double delta = ShortestDeltaDeg(ps.YawDeg, desiredYawDeg);
+            if (Math.Abs(delta) > maxYawStepDeg)
+                delta = Math.Sign(delta) * maxYawStepDeg;
+            return delta;
+        }
+
+        // CGaz-like δopt angle error between current wishdir and velocity vs theoretical δopt
+        public static double ComputeDOptErrorDeg(PlayerState ps, sbyte fwd, sbyte str)
+        {
+            var tmp = ps.Clone();
+            Physics.Friction(tmp);
+            double vfx = tmp.Vel.X, vfy = tmp.Vel.Y;
+            double vf = Math.Sqrt(vfx * vfx + vfy * vfy);
+            if (vf < 1e-6) return 0;
+
+            var inputForWish = new Input { Fwd = fwd, Str = str, Jump = 0, YawDeltaDeg = 0 };
+            var (wishDir, s) = Physics.CmdWishDir(ps, inputForWish);
+
+            double accel = ps.OnGround ? Q3.PM_ACCELERATE : Q3.PM_AIRACCELERATE;
+            double a = accel * Q3.DT * s;
+            double x = (s - a) / Math.Max(vf, 1e-9);
+            x = Math.Max(-1.0, Math.Min(1.0, x));
+            double dOptDeg = Rad2Deg(Math.Acos(x));
+
+            double wishAngDeg = Rad2Deg(Math.Atan2(wishDir.Y, wishDir.X));
+            double velAngDeg = Rad2Deg(Math.Atan2(vfy, vfx));
+            double ang = Math.Abs(ShortestDeltaDeg(velAngDeg, wishAngDeg));
+            return Math.Abs(ang - dOptDeg);
+        }
+
+        // Compute desired yaw angle (degrees) that would align wishdir at δopt relative to current velocity
+        public static double DesiredYawDegForDOpt(PlayerState ps, sbyte fwd, sbyte str)
+        {
+            // Clone state to get vf after friction without mutating input ps
+            var tmp = ps.Clone();
+            Physics.Friction(tmp);
+            double vfx = tmp.Vel.X, vfy = tmp.Vel.Y;
+            double vf = Math.Sqrt(vfx * vfx + vfy * vfy);
+            if (vf < 1e-6)
+                return ps.YawDeg;
+
+            // Compute wishspeed s for these keys at current yaw
+            var inputForWish = new Input { Fwd = fwd, Str = str, Jump = 0, YawDeltaDeg = 0 };
+            var (_, s) = Physics.CmdWishDir(ps, inputForWish);
+
+            // Accel magnitude this frame
+            double accel = ps.OnGround ? Q3.PM_ACCELERATE : Q3.PM_AIRACCELERATE;
+            double a = accel * Q3.DT * s;
+
+            // δopt = acos((s - a)/vf)
+            double x = (s - a) / Math.Max(vf, 1e-9);
+            x = Math.Max(-1.0, Math.Min(1.0, x));
+            double dOptDeg = Rad2Deg(Math.Acos(x));
+
+            int side = Math.Sign(str);
+            if (side == 0) side = 1; // default to right
+
+            // Target wishdir world angle = vel angle ± δopt
+            double velAngDeg = Rad2Deg(Math.Atan2(vfy, vfx));
+            double targetWishDirDeg = velAngDeg + side * dOptDeg;
+
+            // Wishdir relative to yaw for digital keys: atan2(str, fwd)
+            double offsetDeg = Rad2Deg(Math.Atan2(str, fwd == 0 ? 1e-6 : (double)fwd));
+            double desiredYawDeg = targetWishDirDeg - offsetDeg;
+            return NormalizeDeg(desiredYawDeg);
+        }
+
+        // Distance in degrees from current yaw to the δopt-aligned yaw for given keys
+        public static double SnapDistanceDeg(PlayerState ps, sbyte fwd, sbyte str)
+        {
+            double desired = DesiredYawDegForDOpt(ps, fwd, str);
+            return Math.Abs(ShortestDeltaDeg(ps.YawDeg, desired));
+        }
+    }
+
+    // ---------------------- Advanced Search Algorithms ----------------------
+
+    // 1. A* Search with bisection-based jump scheduling (replaces gradient-free pattern search)
+    public static class PatternSearch
+    {
+        // Weights for multi-objective scoring
+        private const double W_Speed = 1.0;
+        private const double W_Airtime = 2.0;
+        private const double W_CGazErr = 0.25; // penalty per degree of δopt error
+        private const double W_YawJerk = 0.05; // penalty per deg change in yaw delta
+        private const double H_JumpBias = 5.0; // heuristic weight toward target jumps
+        // Snap window bonus: reward being within a small window around δopt-aligned yaw at jump frames
+        private const double SNAP_HALF_WIDTH_DEG = 1.0;
+        private const double W_SnapBonus = 5.0;
+
+        private class SegmentResult
+        {
+            public PlayerState EndState = new PlayerState();
+            public List<Input> Actions = new List<Input>();
+            public double Score;
+            public int EndFrame;
+            public int JumpsUsed;
+        }
+
+        // Simulate a segment [startFrame, endFrame) with fixed strafe side and an optional jump at jumpAtFrame
+        private static SegmentResult SimulateSegment(PlayerState start, int startFrame, int endFrame, int? jumpAtFrame, sbyte strSign)
+        {
+            var ps = start.Clone();
+            var actions = new List<Input>();
+            double score = 0;
+            double maxYawPerFrame = 5.0;
+            int jumpsUsed = 0;
+            double prevYawDelta = 0;
+
+            for (int t = startFrame; t < endFrame; t++)
+            {
+                byte jump = (byte)((jumpAtFrame.HasValue && t == jumpAtFrame.Value && ps.OnGround) ? 1 : 0);
+                if (jump == 1) jumpsUsed++;
+
+                double yawDelta = StrafeGuidance.YawDeltaToDOpt(ps, 1, strSign, maxYawPerFrame);
+                var input = new Input
+                {
+                    Fwd = 1,
+                    Str = strSign,
+                    Jump = jump,
+                    YawDeltaDeg = yawDelta
+                };
+
+                // Score before state update
+                double speedXYPre = Math.Sqrt(ps.Vel.X * ps.Vel.X + ps.Vel.Y * ps.Vel.Y);
+                double cgazErr = StrafeGuidance.ComputeDOptErrorDeg(ps, 1, strSign);
+                score += W_Speed * speedXYPre + (ps.OnGround ? 0.0 : W_Airtime) - W_CGazErr * cgazErr - W_YawJerk * Math.Abs(yawDelta - prevYawDelta);
+
+                // Snap window bonus at jump frame
+                if (jump == 1)
+                {
+                    double snapDist = StrafeGuidance.SnapDistanceDeg(ps, 1, strSign);
+                    double snapHit = Math.Max(0, SNAP_HALF_WIDTH_DEG - snapDist) / SNAP_HALF_WIDTH_DEG;
+                    score += W_SnapBonus * snapHit;
+                }
+
+                Physics.Step(ps, input);
+                actions.Add(input);
+                prevYawDelta = yawDelta;
+            }
+
+            return new SegmentResult { EndState = ps, Actions = actions, Score = score, EndFrame = endFrame, JumpsUsed = jumpsUsed };
+        }
+
+        private static SegmentResult BestStrafeForSegment(PlayerState start, int startFrame, int endFrame, int? jumpAtFrame)
+        {
+            var segPos = SimulateSegment(start, startFrame, endFrame, jumpAtFrame, +1);
+            var segNeg = SimulateSegment(start, startFrame, endFrame, jumpAtFrame, -1);
+            return (segPos.Score >= segNeg.Score) ? segPos : segNeg;
+        }
+
+        // Bisection-like search to pick a jump frame around desired interval that maximizes local segment score
+        private static int BisectionBestJumpFrame(PlayerState start, int now, int desiredInterval, int maxWindow, int horizonEnd)
+        {
+            int left = now + Math.Max(1, desiredInterval - maxWindow);
+            int right = Math.Min(horizonEnd - 1, now + desiredInterval + maxWindow);
+            left = Math.Max(left, now + 1);
+            if (left >= right) return left;
+
+            int bestK = left;
+            double bestScore = double.NegativeInfinity;
+
+            // Perform discrete bisection-style hill search
+            for (int iter = 0; iter < 10 && right - left > 2; iter++)
+            {
+                int mid = (left + right) / 2;
+                var segMid = BestStrafeForSegment(start, now, mid + 1, mid); // jump at mid
+                var segNext = BestStrafeForSegment(start, now, mid + 2, mid + 1);
+
+                if (segNext.Score > segMid.Score)
+                    left = mid; // move right
+                else
+                    right = mid; // move left
+            }
+
+            // Evaluate neighborhood to pick best
+            for (int k = Math.Max(left - 2, now + 1); k <= Math.Min(right + 2, horizonEnd - 1); k++)
+            {
+                var seg = BestStrafeForSegment(start, now, k + 1, k);
+                if (seg.Score > bestScore)
+                {
+                    bestScore = seg.Score;
+                    bestK = k;
+                }
+            }
+
+            return bestK;
+        }
+
+        private class Node
+        {
+            public PlayerState State = new PlayerState();
+            public int Frame;
+            public int Jumps;
+            public double G; // accumulated negative cost (we minimize -score)
+            public double H; // heuristic
+            public double F => G + H;
+            public List<Input> Path = new List<Input>();
+        }
+
+        private static double Heuristic(int jumpsUsed, int targetJumps)
+        {
+            return H_JumpBias * Math.Abs(targetJumps - jumpsUsed);
+        }
+
+        // A* planner entry point (maxEvals == max node expansions)
+        public static (double[] best, double score) Optimize(int frames, int targetJumps, int maxEvals = 1000, int? seed = null)
+        {
+            var startNode = new Node
+            {
+                State = new PlayerState(),
+                Frame = 0,
+                Jumps = 0,
+                G = 0,
+                H = Heuristic(0, targetJumps),
+                Path = new List<Input>()
+            };
+
+            var open = new PriorityQueue<Node, double>();
+            open.Enqueue(startNode, startNode.F);
+
+            Node bestTerminal = null;
+            double bestTerminalScore = double.NegativeInfinity;
+            int expansions = 0;
+
+            while (open.Count > 0 && expansions < maxEvals)
+            {
+                var node = open.Dequeue();
+                expansions++;
+
+                // Terminal condition
+                if (node.Frame >= frames)
+                {
+                    double score = -node.G; // since G is negative cost
+                    // prefer exactly target jumps
+                    if ((node.Jumps == targetJumps && score > bestTerminalScore) || bestTerminal == null)
+                    {
+                        bestTerminal = node;
+                        bestTerminalScore = score;
+                    }
+                    continue;
+                }
+
+                int remainingFrames = frames - node.Frame;
+                int remainingJumps = Math.Max(0, targetJumps - node.Jumps);
+
+                // Option 1: No jump in the next small segment
+                int segLen = Math.Min(remainingFrames, remainingJumps > 0 ? 12 : 20); // finer near jumps
+                int segEnd = Math.Min(frames, node.Frame + segLen);
+                var segNoJump = BestStrafeForSegment(node.State, node.Frame, segEnd, null);
+                var childNoJump = new Node
+                {
+                    State = segNoJump.EndState,
+                    Frame = segNoJump.EndFrame,
+                    Jumps = node.Jumps + segNoJump.JumpsUsed,
+                    G = node.G - segNoJump.Score,
+                    H = Heuristic(node.Jumps + segNoJump.JumpsUsed, targetJumps),
+                    Path = new List<Input>(node.Path.Count + segNoJump.Actions.Count)
+                };
+                childNoJump.Path.AddRange(node.Path);
+                childNoJump.Path.AddRange(segNoJump.Actions);
+                open.Enqueue(childNoJump, childNoJump.F);
+
+                // Option 2: Plan a jump using bisection if we still need jumps
+                if (remainingJumps > 0)
+                {
+                    int desiredInterval = Math.Max(10, remainingFrames / (remainingJumps + 1));
+                    int maxWindow = Math.Max(10, desiredInterval / 2);
+                    int bestK = BisectionBestJumpFrame(node.State, node.Frame, desiredInterval, maxWindow, frames);
+
+                    // Simulate to bestK with jump at bestK
+                    var segWithJump = BestStrafeForSegment(node.State, node.Frame, Math.Min(frames, bestK + 1), bestK);
+                    var childJump = new Node
+                    {
+                        State = segWithJump.EndState,
+                        Frame = segWithJump.EndFrame,
+                        Jumps = node.Jumps + segWithJump.JumpsUsed,
+                        G = node.G - segWithJump.Score,
+                        H = Heuristic(node.Jumps + segWithJump.JumpsUsed, targetJumps),
+                        Path = new List<Input>(node.Path.Count + segWithJump.Actions.Count)
+                    };
+                    childJump.Path.AddRange(node.Path);
+                    childJump.Path.AddRange(segWithJump.Actions);
+                    open.Enqueue(childJump, childJump.F);
+                }
+            }
+
+            // Build parameter vector from bestTerminal path
+            int totalFrames = Math.Min(frames, bestTerminal?.Path.Count ?? 0);
+            var bestParams = new double[frames * 2];
+            for (int i = 0; i < frames; i++)
+            {
+                if (i < totalFrames)
+                {
+                    var inp = bestTerminal.Path[i];
+                    bestParams[i * 2] = inp.Str >= 0 ? 1.0 : -1.0; // side pref
+                    bestParams[i * 2 + 1] = inp.Jump;
+                }
+                else
+                {
+                    bestParams[i * 2] = 0; // neutral
+                    bestParams[i * 2 + 1] = 0;
+                }
+            }
+
+            double bestScore = bestTerminalScore;
+            Console.WriteLine($"[A*] Expansions={expansions}, BestScore={bestScore:F2}, FramesInPath={totalFrames}");
+            return (bestParams, bestScore);
+        }
+
+        // Retain evaluation for other algorithms to reuse
+        public static double EvaluateMovementSequence(double[] parameters, int frames, int targetJumps)
+        {
+            var ps = new PlayerState();
+            double totalScore = 0;
+            int jumps = 0;
+            double maxYawPerFrame = 5.0; // deg/frame
+            double prevYawDelta = 0;
+
+            for (int i = 0; i < frames && i * 2 + 1 < parameters.Length; i++)
+            {
+                // reinterpret parameters: side preference in [-inf,inf], jump signal in [0,1]
+                double sidePref = parameters[i * 2];
+                double jumpSignal = parameters[i * 2 + 1];
+
+                sbyte fwd = 1; // always forward
+                sbyte str = sidePref >= 0 ? (sbyte)1 : (sbyte)-1; // choose strafe side
+
+                // Guidance yaw step towards δopt
+                double yawDelta = StrafeGuidance.YawDeltaToDOpt(ps, fwd, str, maxYawPerFrame);
+
+                byte jump = 0;
+                if (ps.OnGround && jumpSignal > 0.5)
+                {
+                    jump = 1;
+                    jumps++;
+                    if (jumps > targetJumps)
+                    {
+                        // hard penalty for exceeding jump budget
+                        totalScore -= 1e6;
+                        break;
+                    }
+                }
+
+                // Score pre-step
+                double speed = Math.Sqrt(ps.Vel.X * ps.Vel.X + ps.Vel.Y * ps.Vel.Y);
+                double cgazErr = StrafeGuidance.ComputeDOptErrorDeg(ps, fwd, str);
+                totalScore += W_Speed * speed + (ps.OnGround ? 0.0 : W_Airtime) - W_CGazErr * cgazErr - W_YawJerk * Math.Abs(yawDelta - prevYawDelta);
+
+                // Snap window bonus at jump frame
+                if (jump == 1)
+                {
+                    double snapDist = StrafeGuidance.SnapDistanceDeg(ps, fwd, str);
+                    double snapHit = Math.Max(0, SNAP_HALF_WIDTH_DEG - snapDist) / SNAP_HALF_WIDTH_DEG;
+                    totalScore += W_SnapBonus * snapHit;
+                }
+
+                var input = new Input { Fwd = fwd, Str = str, Jump = jump, YawDeltaDeg = yawDelta };
+                Physics.Step(ps, input);
+                prevYawDelta = yawDelta;
+            }
+
+            // preference to hit exactly targetJumps
+            totalScore -= 1000.0 * Math.Abs(jumps - targetJumps);
+            return totalScore;
+        }
+    }
+
+    // 2. Simple but effective Random Search
+    public static class RandomSearch
+    {
+        public static (double[] best, double score) Optimize(int frames, int targetJumps, int iterations = 2000, int? seed = null)
+        {
+            int numParams = frames * 2;
+            var rng = new Random(seed ?? Environment.TickCount);
+
+            var bestParams = new double[numParams];
+            double bestScore = double.MinValue;
+
+            Console.WriteLine($"[RandomSearch] Starting: {iterations} iterations");
+
+            for (int iter = 0; iter < iterations; iter++)
+            {
+                var candidate = new double[numParams];
+
+                for (int i = 0; i < frames; i++)
+                {
+                    // Strafe side pref in [-1,1], jumps roughly periodically with variation
+                    candidate[i * 2] = rng.NextDouble() * 2.0 - 1.0; // side pref
+                    candidate[i * 2 + 1] = (i % (10 + rng.Next(8)) == 0) ? 1.0 : 0.0;
+                }
+
+                double score = PatternSearch.EvaluateMovementSequence(candidate, frames, targetJumps);
+
+                if (score > bestScore)
+                {
+                    bestScore = score;
+                    bestParams = (double[])candidate.Clone();
+                }
+
+                if (iter % 400 == 0)
+                    Console.WriteLine($"  Iter {iter}: Best = {bestScore:F2}");
+            }
+
+            return (bestParams, bestScore);
+        }
+    }
+
+    // 3. Differential Evolution (very effective for this problem)
+    public static class DifferentialEvolution
+    {
+        public static (double[] best, double score) Optimize(int frames, int targetJumps, int generations = 100, int? seed = null)
+        {
+            int numParams = frames * 2;
+            int popSize = 30;
+            double F = 0.5; // differential weight
+            double CR = 0.7; // crossover probability
+            var rng = new Random(seed ?? Environment.TickCount);
+
+            // Initialize population
+            var population = new double[popSize][];
+            var scores = new double[popSize];
+
+            for (int i = 0; i < popSize; i++)
+            {
+                population[i] = new double[numParams];
+                for (int j = 0; j < frames; j++)
+                {
+                    population[i][j * 2] = rng.NextDouble() * 2.0 - 1.0; // side pref
+                    population[i][j * 2 + 1] = (j % (12 + (i + j) % 6) == 0) ? 1.0 : 0.0; // varied jump timing
+                }
+                scores[i] = PatternSearch.EvaluateMovementSequence(population[i], frames, targetJumps);
+            }
+
+            Console.WriteLine($"[DiffEvolution] Starting: pop={popSize}, gens={generations}");
+
+            for (int gen = 0; gen < generations; gen++)
+            {
+                for (int i = 0; i < popSize; i++)
+                {
+                    // Select three random vectors (different from i)
+                    int a, b, c;
+                    do { a = rng.Next(popSize); } while (a == i);
+                    do { b = rng.Next(popSize); } while (b == i || b == a);
+                    do { c = rng.Next(popSize); } while (c == i || c == a || c == b);
+
+                    // Create mutant vector
+                    var mutant = new double[numParams];
+                    for (int j = 0; j < numParams; j++)
+                    {
+                        mutant[j] = population[a][j] + F * (population[b][j] - population[c][j]);
+                    }
+
+                    // Crossover
+                    var trial = new double[numParams];
+                    int jrand = rng.Next(numParams);
+                    for (int j = 0; j < numParams; j++)
+                    {
+                        trial[j] = (rng.NextDouble() < CR || j == jrand) ? mutant[j] : population[i][j];
+
+                        // Clamp to valid ranges
+                        if (j % 2 == 0) trial[j] = Math.Max(-1, Math.Min(1, trial[j])); // side pref
+                        else trial[j] = Math.Max(0, Math.Min(1, trial[j])); // jump signal
+                    }
+
+                    // Selection
+                    double trialScore = PatternSearch.EvaluateMovementSequence(trial, frames, targetJumps);
+                    if (trialScore > scores[i])
+                    {
+                        population[i] = trial;
+                        scores[i] = trialScore;
+                    }
+                }
+
+                if (gen % 20 == 0)
+                {
+                    double maxScore = scores.Max();
+                    Console.WriteLine($"  Gen {gen}: Best = {maxScore:F2}");
+                }
+            }
+
+            int bestIdx = Array.IndexOf(scores, scores.Max());
+            return (population[bestIdx], scores[bestIdx]);
+        }
+
+        // Convert optimized parameters back to input sequence (uses δopt guidance)
+        public static List<Input> ParametersToInputs(double[] parameters, int frames)
+        {
+            var inputs = new List<Input>();
+            var ps = new PlayerState(); // track state for jump decisions/yaw
+            double maxYawPerFrame = 5.0;
+
+            for (int i = 0; i < frames && i * 2 + 1 < parameters.Length; i++)
+            {
+                double sidePref = parameters[i * 2];
+                double jumpSignal = parameters[i * 2 + 1];
+
+                sbyte fwd = 1;
+                sbyte str = sidePref >= 0 ? (sbyte)1 : (sbyte)-1;
+                double yawDelta = StrafeGuidance.YawDeltaToDOpt(ps, fwd, str, maxYawPerFrame);
+                byte jump = (ps.OnGround && jumpSignal > 0.5) ? (byte)1 : (byte)0;
+
+                var input = new Input { Fwd = fwd, Str = str, Jump = jump, YawDeltaDeg = yawDelta };
+                inputs.Add(input);
+
+                Physics.Step(ps, input);
+            }
+
+            return inputs;
+        }
+
+        // ---------------------- Solution Converter ----------------------
+        public static class SolutionConverter
+        {
+            public static List<Input> ParametersToInputs(double[] parameters, int frames)
+            {
+                var inputs = new List<Input>();
+                int paramIndex = 0;
+
+                var combos = new (sbyte fwd, sbyte str)[] {
+                (1, 0), (1, 1), (1, -1), (0, 1), (0, -1), (0, 0), (-1, 0)
+            };
+
+                for (int t = 0; t < frames && paramIndex + 2 < parameters.Length; t++)
+                {
+                    int comboIdx = Math.Max(0, Math.Min(6, (int)Math.Round(parameters[paramIndex++] * 6)));
+                    double yawDelta = Math.Max(-5, Math.Min(5, parameters[paramIndex++] * 10 - 5));
+                    double jumpProb = Math.Max(0, Math.Min(1, parameters[paramIndex++]));
+
+                    var (fwd, str) = combos[comboIdx];
+
+                    // For jump determination, we need to simulate to know ground state
+                    // This is a simplification - in practice you'd need the actual state
+                    byte jump = (t % 15 == 0 && jumpProb > 0.7) ? (byte)1 : (byte)0;
+
+                    inputs.Add(new Input { Fwd = fwd, Str = str, Jump = jump, YawDeltaDeg = yawDelta });
+                }
+
+                return inputs;
+            }
+        }
+
+        // ---------------------- Demo / Entry point ----------------------
+        public static class Program
+        {
+            private const double TargetMaxSpeed = 2000.0;
+            private const int TargetJumpsExact = 30;
+
+            static int ComputeFlightFramesFromHeight(double height)
+            {
+                // time-of-flight T ≈ 2*sqrt(2*h/g)
+                double T = 2.0 * Math.Sqrt(2.0 * height / Q3.SV_GRAVITY);
+                return (int)Math.Round(T * Q3.FPS);
+            }
+
+            static void Main()
+            {
+                Console.WriteLine($"Q3 Movement Optimizer - Goal search (MaxSpeed ≥ {TargetMaxSpeed} ups, exactly {TargetJumpsExact} jumps)");
+                Console.WriteLine("==========================================================================");
+
+                int frames = 2500; // ~10 seconds at 125 FPS
+                int attempt = 0;
+                int maxAttempts = 5; // safety cap
+
+                int airFrames48 = ComputeFlightFramesFromHeight(48.0);
+                Console.WriteLine($"Estimated air time for 48u jump: ~{airFrames48} frames at {Q3.FPS} FPS");
+
+                // Tip: disable VQ3 air wishspeed cap to surpass ~480 ups
+                Physics.UseAirWishCap = false;
+                Physics.FrictionScale = 1.0; // 1.0 ground; lower for slick-like behavior
+
+                while (attempt < maxAttempts)
+                {
+                    attempt++;
+                    int seed = Environment.TickCount + attempt * 7919;
+
+                    Console.WriteLine($"\nAttempt {attempt} (seed={seed})");
+                    var (psParams, psScore) = PatternSearch.Optimize(frames, TargetJumpsExact, maxEvals: 1000, seed: seed);
+                    var (rsParams, rsScore) = RandomSearch.Optimize(frames, TargetJumpsExact, iterations: 2000, seed: seed + 1);
+                    var (deParams, deScore) = DifferentialEvolution.Optimize(frames, TargetJumpsExact, generations: 100, seed: seed + 2);
+
+                    // Diagnostics: evaluate jump counts and speeds for each candidate
+                    var psInputs = DifferentialEvolution.ParametersToInputs(psParams, frames);
+                    var psStats = EvaluatePlan(new PlayerState(), psInputs);
+                    var rsInputs = DifferentialEvolution.ParametersToInputs(rsParams, frames);
+                    var rsStats = EvaluatePlan(new PlayerState(), rsInputs);
+                    var deInputs = DifferentialEvolution.ParametersToInputs(deParams, frames);
+                    var deStats = EvaluatePlan(new PlayerState(), deInputs);
+
+                    Console.WriteLine($"  [PS] score={psScore:F2}, jumps={psStats.jumps}, maxSpeed={psStats.maxSpeed:F1}");
+                    Console.WriteLine($"  [RS] score={rsScore:F2}, jumps={rsStats.jumps}, maxSpeed={rsStats.maxSpeed:F1}");
+                    Console.WriteLine($"  [DE] score={deScore:F2}, jumps={deStats.jumps}, maxSpeed={deStats.maxSpeed:F1}");
+
+                    // Prefer candidates closer to target jumps, then higher max speed, then higher score
+                    (double[] p, (double finalX, double finalSpeed, double maxSpeed, int jumps, int groundFrames, int airFrames) s, double sc) best = (psParams, psStats, psScore);
+                    void Consider((double[] p, (double, double, double, int, int, int) s, double sc) cand)
+                    {
+                        int dBest = Math.Abs(best.s.jumps - TargetJumpsExact);
+                        int dNew = Math.Abs(cand.s.Item4 - TargetJumpsExact);
+                        if (dNew < dBest
+                            || (dNew == dBest && cand.s.Item3 > best.s.maxSpeed)
+                            || (dNew == dBest && Math.Abs(cand.s.Item3 - best.s.maxSpeed) < 1e-6 && cand.sc > best.sc))
+                        {
+                            best = cand;
+                        }
+                    }
+                    Consider((rsParams, rsStats, rsScore));
+                    Consider((deParams, deStats, deScore));
+
+                    var bestParams = best.p;
+
+                    // Convert and evaluate final pick
+                    var optimizedInputs = DifferentialEvolution.ParametersToInputs(bestParams, frames);
+                    var stats = EvaluatePlan(new PlayerState(), optimizedInputs);
+
+                    Console.WriteLine($"Result: X={stats.finalX:F1}, jumps={stats.jumps}, finalSpeed={stats.finalSpeed:F1}, maxSpeed={stats.maxSpeed:F1}");
+
+                    if (stats.maxSpeed >= TargetMaxSpeed && stats.jumps == TargetJumpsExact)
+                    {
+                        Console.WriteLine("GOAL MET -> exporting movement.cfg with auto-timed jumps at landing");
+                        // call external exporter (SOLID)
+                        Export.Q3CfgExporter.Export(optimizedInputs, "movement.cfg", TargetJumpsExact, airFrames48);
+                        return;
+                    }
+                }
+
+                Console.WriteLine("Goal not met within attempt budget.");
+            }
+
+            private static (double finalX, double finalSpeed, double maxSpeed, int jumps, int groundFrames, int airFrames) EvaluatePlan(PlayerState ps, List<Input> inputs)
+            {
+                double maxSpeed = 0;
+                int jumps = 0, ground = 0, air = 0;
+
+                foreach (var input in inputs)
+                {
+                    var beforeGround = ps.OnGround;
+                    Physics.Step(ps, input);
+                    // Count jump by detecting transition from ground->air this frame
+                    if (beforeGround && !ps.OnGround)
+                        jumps++;
+                    var speed = ps.Vel.Len();
+                    if (speed > maxSpeed) maxSpeed = speed;
+                    if (ps.OnGround) ground++; else air++;
+                }
+
+                return (ps.Pos.X, ps.Vel.Len(), maxSpeed, jumps, ground, air);
+            }
+        }
+    }
+
+    /*
+        Advanced Optimization Algorithms for Q3 Movement:
+
+        - PatternSearch now implements an A* planner with bisection-based jump timing per segment.
+        - Random Search and Differential Evolution remain, using StrafeGuidance for yaw.
+
+        Goal Search:
+        - Keeps searching with new seeds until MaxSpeed ≥ TargetMaxSpeed and exactly TargetJumpsExact jumps.
+        - Computes 48u jump airtime and auto-times +moveup again at estimated landings in the exported cfg.
+        */

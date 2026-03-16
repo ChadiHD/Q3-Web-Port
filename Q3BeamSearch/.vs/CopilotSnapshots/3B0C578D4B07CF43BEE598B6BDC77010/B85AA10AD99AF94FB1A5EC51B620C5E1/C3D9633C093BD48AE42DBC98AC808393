@@ -1,0 +1,778 @@
+﻿<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Q3 Movement 3D Viewer</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            margin: 0;
+            padding: 0;
+            background: #1a1a1a;
+            color: #fff;
+            overflow: hidden;
+        }
+
+        .viewer-container {
+            position: relative;
+            width: 100vw;
+            height: 100vh;
+        }
+
+        .controls-overlay {
+            position: absolute;
+            top: 20px;
+            left: 20px;
+            z-index: 1000;
+            background: rgba(42, 42, 42, 0.9);
+            padding: 20px;
+            border-radius: 8px;
+            min-width: 300px;
+            backdrop-filter: blur(10px);
+        }
+
+        .controls-overlay h3 {
+            margin: 0 0 15px 0;
+            color: #4fc3f7;
+        }
+
+        .control-group {
+            margin-bottom: 15px;
+        }
+
+        .control-group label {
+            display: block;
+            margin-bottom: 5px;
+            color: #bbb;
+            font-size: 12px;
+        }
+
+        .control-row {
+            display: flex;
+            gap: 10px;
+            align-items: center;
+            margin-bottom: 10px;
+        }
+
+        button {
+            padding: 8px 12px;
+            background: #3a3a3a;
+            color: #fff;
+            border: 1px solid #555;
+            border-radius: 4px;
+            cursor: pointer;
+        }
+
+        button:hover {
+            background: #4a4a4a;
+        }
+
+        button.active {
+            background: #4fc3f7;
+            color: #000;
+        }
+
+        input[type="range"] {
+            flex: 1;
+            height: 6px;
+            background: #3a3a3a;
+            outline: none;
+            border-radius: 3px;
+        }
+
+        input[type="checkbox"] {
+            margin-right: 8px;
+        }
+
+        .frame-display {
+            background: #3a3a3a;
+            padding: 8px 12px;
+            border-radius: 4px;
+            font-weight: bold;
+            color: #4fc3f7;
+            min-width: 100px;
+            text-align: center;
+        }
+
+        .legend {
+            position: absolute;
+            bottom: 20px;
+            right: 20px;
+            background: rgba(42, 42, 42, 0.9);
+            padding: 15px;
+            border-radius: 8px;
+            backdrop-filter: blur(10px);
+        }
+
+        .legend h4 {
+            margin: 0 0 10px 0;
+            color: #4fc3f7;
+        }
+
+        .legend-item {
+            display: flex;
+            align-items: center;
+            margin-bottom: 5px;
+            font-size: 12px;
+        }
+
+        .legend-color {
+            width: 20px;
+            height: 3px;
+            margin-right: 10px;
+            border-radius: 1px;
+        }
+
+        .info-panel {
+            position: absolute;
+            top: 20px;
+            right: 20px;
+            background: rgba(42, 42, 42, 0.9);
+            padding: 15px;
+            border-radius: 8px;
+            backdrop-filter: blur(10px);
+            min-width: 200px;
+        }
+
+        .info-panel h4 {
+            margin: 0 0 10px 0;
+            color: #4fc3f7;
+        }
+
+        .info-item {
+            display: flex;
+            justify-content: space-between;
+            margin-bottom: 5px;
+            font-size: 12px;
+        }
+
+        .info-label {
+            color: #bbb;
+        }
+
+        .info-value {
+            color: #fff;
+            font-weight: bold;
+        }
+
+        .back-button {
+            position: absolute;
+            top: 20px;
+            right: 260px;
+            z-index: 1001;
+        }
+    </style>
+</head>
+
+<body>
+    <div class="viewer-container">
+        <div id="threejs-container"></div>
+
+        <button class="back-button" onclick="window.history.back()">? Back to Charts</button>
+
+        <div class="controls-overlay">
+            <h3>3D Movement Controls</h3>
+
+            <div class="control-group">
+                <div class="control-row">
+                    <label>Frame:</label>
+                    <input type="range" id="frameSlider" min="0" max="100" value="0" step="1">
+                    <div id="frameDisplay" class="frame-display">0 / 0</div>
+                </div>
+            </div>
+
+            <div class="control-group">
+                <div class="control-row">
+                    <button id="btnFirst">?</button>
+                    <button id="btnPrev">?</button>
+                    <button id="btnPlay">?</button>
+                    <button id="btnNext">?</button>
+                    <button id="btnLast">?</button>
+                    <select id="playbackSpeed">
+                        <option value="0.25">0.25x</option>
+                        <option value="0.5">0.5x</option>
+                        <option value="1" selected>1x</option>
+                        <option value="2">2x</option>
+                        <option value="4">4x</option>
+                    </select>
+                </div>
+            </div>
+
+            <div class="control-group">
+                <label>Visibility Options:</label>
+                <div style="display: flex; flex-direction: column; gap: 5px;">
+                    <label><input type="checkbox" id="showPath" checked> Movement Path</label>
+                    <label><input type="checkbox" id="showVelocity" checked> Velocity Vector</label>
+                    <label><input type="checkbox" id="showYaw" checked> View Direction</label>
+                    <label><input type="checkbox" id="showWish" checked> Wish Direction</label>
+                    <label><input type="checkbox" id="showGround" checked> Ground Contact</label>
+                    <label><input type="checkbox" id="showTrail" checked> Trail Effect</label>
+                </div>
+            </div>
+
+            <div class="control-group">
+                <div class="control-row">
+                    <button id="resetCamera">Reset Camera</button>
+                    <button id="topView">Top View</button>
+                    <button id="sideView">Side View</button>
+                </div>
+            </div>
+        </div>
+
+        <div class="info-panel">
+            <h4>Current Frame Info</h4>
+            <div class="info-item">
+                <span class="info-label">Frame:</span>
+                <span class="info-value" id="infoFrame">0</span>
+            </div>
+            <div class="info-item">
+                <span class="info-label">Speed:</span>
+                <span class="info-value" id="infoSpeed">0 ups</span>
+            </div>
+            <div class="info-item">
+                <span class="info-label">Position:</span>
+                <span class="info-value" id="infoPosition">0, 0, 0</span>
+            </div>
+            <div class="info-item">
+                <span class="info-label">Yaw:</span>
+                <span class="info-value" id="infoYaw">0°</span>
+            </div>
+            <div class="info-item">
+                <span class="info-label">Ground:</span>
+                <span class="info-value" id="infoGround">No</span>
+            </div>
+            <div class="info-item">
+                <span class="info-label">Height:</span>
+                <span class="info-value" id="infoHeight">0</span>
+            </div>
+        </div>
+
+        <div class="legend">
+            <h4>Vector Legend</h4>
+            <div class="legend-item">
+                <div class="legend-color" style="background: #4fc3f7;"></div>
+                <span>Movement Path</span>
+            </div>
+            <div class="legend-item">
+                <div class="legend-color" style="background: #ff6b6b;"></div>
+                <span>Current Position</span>
+            </div>
+            <div class="legend-item">
+                <div class="legend-color" style="background: #4caf50;"></div>
+                <span>Velocity Vector</span>
+            </div>
+            <div class="legend-item">
+                <div class="legend-color" style="background: #ff9800;"></div>
+                <span>View Direction</span>
+            </div>
+            <div class="legend-item">
+                <div class="legend-color" style="background: #9c27b0;"></div>
+                <span>Wish Direction</span>
+            </div>
+            <div class="legend-item">
+                <div class="legend-color" style="background: #f44336;"></div>
+                <span>Ground Contact</span>
+            </div>
+        </div>
+    </div>
+
+    <script type="importmap">
+    {
+        "imports": {
+            "three": "https://unpkg.com/three@0.160.0/build/three.module.js",
+            "three/addons/": "https://unpkg.com/three@0.160.0/examples/jsm/"
+        }
+    }
+    </script>
+
+    <script type="module">
+        import * as THREE from 'three';
+        import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+
+        // Global variables
+        let scene, camera, renderer, controls;
+        let currentFrames = [];
+        let currentFrame = 0;
+        let isPlaying = false;
+        let playbackInterval = null;
+
+        // 3D Objects
+        let pathLine, playerSphere, velocityArrow, yawArrow, wishArrow;
+        let groundIndicator, trailPoints = [];
+        let pathGeometry, pathMaterial;
+
+        // Initialize Three.js scene
+        function initThreeJS() {
+            const container = document.getElementById('threejs-container');
+
+            // Scene setup
+            scene = new THREE.Scene();
+            scene.background = new THREE.Color(0x1a1a1a);
+            scene.fog = new THREE.Fog(0x1a1a1a, 1000, 5000);
+
+            // Camera setup
+            camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 1, 10000);
+            camera.position.set(500, 500, 500);
+
+            // Renderer setup
+            renderer = new THREE.WebGLRenderer({ antialias: true });
+            renderer.setSize(window.innerWidth, window.innerHeight);
+            renderer.shadowMap.enabled = true;
+            renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+            container.appendChild(renderer.domElement);
+
+            // Controls
+            controls = new OrbitControls(camera, renderer.domElement);
+            controls.enableDamping = true;
+            controls.dampingFactor = 0.05;
+            controls.screenSpacePanning = false;
+            controls.minDistance = 50;
+            controls.maxDistance = 2000;
+
+            // Lighting
+            const ambientLight = new THREE.AmbientLight(0x404040, 0.4);
+            scene.add(ambientLight);
+
+            const directionalLight = new THREE.DirectionalLight(0xffffff, 0.8);
+            directionalLight.position.set(100, 100, 50);
+            directionalLight.castShadow = true;
+            directionalLight.shadow.mapSize.width = 2048;
+            directionalLight.shadow.mapSize.height = 2048;
+            scene.add(directionalLight);
+
+            // Grid helper
+            const gridHelper = new THREE.GridHelper(2000, 50, 0x444444, 0x222222);
+            scene.add(gridHelper);
+
+            // Coordinate axes
+            const axesHelper = new THREE.AxesHelper(200);
+            scene.add(axesHelper);
+
+            // Initialize 3D objects
+            initializeObjects();
+
+            // Event listeners
+            window.addEventListener('resize', onWindowResize);
+            setupControlListeners();
+
+            // Animation loop
+            animate();
+        }
+
+        function initializeObjects() {
+            // Player sphere (current position)
+            const sphereGeometry = new THREE.SphereGeometry(8, 16, 16);
+            const sphereMaterial = new THREE.MeshPhongMaterial({
+                color: 0xff6b6b,
+                emissive: 0x220000,
+                shininess: 100
+            });
+            playerSphere = new THREE.Mesh(sphereGeometry, sphereMaterial);
+            playerSphere.castShadow = true;
+            scene.add(playerSphere);
+
+            // Movement path line
+            pathGeometry = new THREE.BufferGeometry();
+            pathMaterial = new THREE.LineBasicMaterial({
+                color: 0x4fc3f7,
+                linewidth: 3,
+                transparent: true,
+                opacity: 0.8
+            });
+            pathLine = new THREE.Line(pathGeometry, pathMaterial);
+            scene.add(pathLine);
+
+            // Velocity vector arrow
+            velocityArrow = createArrow(0x4caf50, 'Velocity');
+            scene.add(velocityArrow);
+
+            // Yaw direction arrow
+            yawArrow = createArrow(0xff9800, 'Yaw');
+            scene.add(yawArrow);
+
+            // Wish direction arrow
+            wishArrow = createArrow(0x9c27b0, 'Wish');
+            scene.add(wishArrow);
+
+            // Ground contact indicator
+            const groundGeometry = new THREE.CylinderGeometry(15, 15, 2, 16);
+            const groundMaterial = new THREE.MeshPhongMaterial({
+                color: 0xf44336,
+                transparent: true,
+                opacity: 0.7
+            });
+            groundIndicator = new THREE.Mesh(groundGeometry, groundMaterial);
+            scene.add(groundIndicator);
+        }
+
+        function createArrow(color, name) {
+            const group = new THREE.Group();
+            group.name = name;
+
+            // Arrow shaft
+            const shaftGeometry = new THREE.CylinderGeometry(1, 1, 50, 8);
+            const shaftMaterial = new THREE.MeshPhongMaterial({ color: color });
+            const shaft = new THREE.Mesh(shaftGeometry, shaftMaterial);
+            shaft.position.y = 25;
+            group.add(shaft);
+
+            // Arrow head
+            const headGeometry = new THREE.ConeGeometry(4, 10, 8);
+            const headMaterial = new THREE.MeshPhongMaterial({ color: color });
+            const head = new THREE.Mesh(headGeometry, headMaterial);
+            head.position.y = 55;
+            group.add(head);
+
+            return group;
+        }
+
+        function updateVisualization() {
+            if (!currentFrames || currentFrames.length === 0 || !currentFrames[currentFrame]) return;
+
+            const frame = currentFrames[currentFrame];
+
+            // Update player position
+            playerSphere.position.set(frame.x, frame.z, frame.y);
+
+            // Update velocity vector
+            if (currentFrame > 0) {
+                const prevFrame = currentFrames[currentFrame - 1];
+                const dt = 1.0 / 125.0;
+                const velX = (frame.x - prevFrame.x) / dt;
+                const velY = (frame.y - prevFrame.y) / dt;
+                const velZ = (frame.z - prevFrame.z) / dt;
+
+                const velocity = new THREE.Vector3(velX, velZ, velY);
+                const speed = velocity.length();
+
+                if (speed > 10) {
+                    velocity.normalize();
+                    velocity.multiplyScalar(Math.min(speed * 0.1, 100));
+
+                    velocityArrow.position.copy(playerSphere.position);
+                    velocityArrow.lookAt(
+                        playerSphere.position.x + velocity.x,
+                        playerSphere.position.y + velocity.y,
+                        playerSphere.position.z + velocity.z
+                    );
+                    velocityArrow.visible = document.getElementById('showVelocity').checked;
+                } else {
+                    velocityArrow.visible = false;
+                }
+            }
+
+            // Update yaw direction arrow
+            const yawRad = frame.yawDeg * Math.PI / 180;
+            const yawDirection = new THREE.Vector3(
+                Math.cos(yawRad) * 80,
+                0,
+                Math.sin(yawRad) * 80
+            );
+
+            yawArrow.position.copy(playerSphere.position);
+            yawArrow.lookAt(
+                playerSphere.position.x + yawDirection.x,
+                playerSphere.position.y + yawDirection.y,
+                playerSphere.position.z + yawDirection.z
+            );
+            yawArrow.visible = document.getElementById('showYaw').checked;
+
+            // Update wish direction (simplified - 45 degree offset from yaw)
+            const wishDirection = new THREE.Vector3(
+                Math.cos(yawRad + Math.PI / 4) * 60,
+                0,
+                Math.sin(yawRad + Math.PI / 4) * 60
+            );
+
+            wishArrow.position.copy(playerSphere.position);
+            wishArrow.lookAt(
+                playerSphere.position.x + wishDirection.x,
+                playerSphere.position.y + wishDirection.y,
+                playerSphere.position.z + wishDirection.z
+            );
+            wishArrow.visible = document.getElementById('showWish').checked;
+
+            // Update ground indicator
+            if (frame.onGround) {
+                groundIndicator.position.set(frame.x, frame.z - 10, frame.y);
+                groundIndicator.visible = document.getElementById('showGround').checked;
+            } else {
+                groundIndicator.visible = false;
+            }
+
+            // Update trail
+            if (document.getElementById('showTrail').checked) {
+                updateTrail(frame);
+            }
+
+            // Update info panel
+            updateInfoPanel(frame);
+        }
+
+        function updateTrail(frame) {
+            if (trailPoints.length > 50) {
+                const oldPoint = trailPoints.shift();
+                scene.remove(oldPoint);
+            }
+
+            const trailGeometry = new THREE.SphereGeometry(2, 8, 8);
+            const trailMaterial = new THREE.MeshBasicMaterial({
+                color: 0x4fc3f7,
+                transparent: true,
+                opacity: 0.3
+            });
+            const trailPoint = new THREE.Mesh(trailGeometry, trailMaterial);
+            trailPoint.position.set(frame.x, frame.z, frame.y);
+
+            trailPoints.push(trailPoint);
+            scene.add(trailPoint);
+
+            // Fade trail points
+            trailPoints.forEach((point, index) => {
+                point.material.opacity = (index / trailPoints.length) * 0.3;
+            });
+        }
+
+        function updatePath() {
+            if (!currentFrames || currentFrames.length === 0) return;
+
+            const points = [];
+            currentFrames.forEach(frame => {
+                points.push(new THREE.Vector3(frame.x, frame.z, frame.y));
+            });
+
+            pathGeometry.setFromPoints(points);
+            pathLine.visible = document.getElementById('showPath').checked;
+        }
+
+        function updateInfoPanel(frame) {
+            document.getElementById('infoFrame').textContent = frame.frame;
+            document.getElementById('infoSpeed').textContent = `${frame.speed.toFixed(1)} ups`;
+            document.getElementById('infoPosition').textContent = `${frame.x.toFixed(1)}, ${frame.y.toFixed(1)}, ${frame.z.toFixed(1)}`;
+            document.getElementById('infoYaw').textContent = `${frame.yawDeg.toFixed(1)}°`;
+            document.getElementById('infoGround').textContent = frame.onGround ? 'Yes' : 'No';
+            document.getElementById('infoHeight').textContent = frame.z.toFixed(1);
+        }
+
+        function setCurrentFrame(frameIndex) {
+            if (!currentFrames || currentFrames.length === 0) return;
+
+            frameIndex = Math.max(0, Math.min(frameIndex, currentFrames.length - 1));
+            currentFrame = frameIndex;
+
+            document.getElementById('frameSlider').value = frameIndex;
+            document.getElementById('frameDisplay').textContent = `${frameIndex} / ${currentFrames.length - 1}`;
+
+            updateVisualization();
+        }
+
+        function setupControlListeners() {
+            // Frame slider
+            document.getElementById('frameSlider').addEventListener('input', (e) => {
+                setCurrentFrame(parseInt(e.target.value));
+            });
+
+            // Playback controls
+            document.getElementById('btnFirst').addEventListener('click', () => setCurrentFrame(0));
+            document.getElementById('btnPrev').addEventListener('click', () => setCurrentFrame(currentFrame - 1));
+            document.getElementById('btnPlay').addEventListener('click', togglePlayback);
+            document.getElementById('btnNext').addEventListener('click', () => setCurrentFrame(currentFrame + 1));
+            document.getElementById('btnLast').addEventListener('click', () => setCurrentFrame(currentFrames.length - 1));
+
+            // Visibility toggles
+            ['showPath', 'showVelocity', 'showYaw', 'showWish', 'showGround', 'showTrail'].forEach(id => {
+                document.getElementById(id).addEventListener('change', updateVisualization);
+            });
+
+            // Camera controls
+            document.getElementById('resetCamera').addEventListener('click', resetCamera);
+            document.getElementById('topView').addEventListener('click', () => setCameraView('top'));
+            document.getElementById('sideView').addEventListener('click', () => setCameraView('side'));
+
+            // Keyboard shortcuts
+            document.addEventListener('keydown', handleKeyPress);
+        }
+
+        function togglePlayback() {
+            if (isPlaying) {
+                stopPlayback();
+            } else {
+                startPlayback();
+            }
+        }
+
+        function startPlayback() {
+            if (isPlaying || !currentFrames || currentFrames.length === 0) return;
+
+            isPlaying = true;
+            document.getElementById('btnPlay').textContent = '?';
+
+            const speed = parseFloat(document.getElementById('playbackSpeed').value);
+            const interval = Math.max(16, 1000 / (125 * speed));
+
+            playbackInterval = setInterval(() => {
+                if (currentFrame >= currentFrames.length - 1) {
+                    stopPlayback();
+                    return;
+                }
+                setCurrentFrame(currentFrame + 1);
+            }, interval);
+        }
+
+        function stopPlayback() {
+            isPlaying = false;
+            document.getElementById('btnPlay').textContent = '?';
+
+            if (playbackInterval) {
+                clearInterval(playbackInterval);
+                playbackInterval = null;
+            }
+        }
+
+        function resetCamera() {
+            camera.position.set(500, 500, 500);
+            camera.lookAt(0, 0, 0);
+            controls.target.set(0, 0, 0);
+            controls.update();
+        }
+
+        function setCameraView(view) {
+            if (!currentFrames || currentFrames.length === 0) return;
+
+            const frame = currentFrames[currentFrame];
+            const target = new THREE.Vector3(frame.x, frame.z, frame.y);
+
+            switch (view) {
+                case 'top':
+                    camera.position.set(frame.x, frame.z + 800, frame.y);
+                    break;
+                case 'side':
+                    camera.position.set(frame.x + 500, frame.z + 200, frame.y);
+                    break;
+            }
+
+            controls.target.copy(target);
+            controls.update();
+        }
+
+        function handleKeyPress(e) {
+            if (!currentFrames || currentFrames.length === 0) return;
+
+            switch (e.key) {
+                case 'ArrowLeft':
+                    e.preventDefault();
+                    setCurrentFrame(currentFrame - 1);
+                    break;
+                case 'ArrowRight':
+                    e.preventDefault();
+                    setCurrentFrame(currentFrame + 1);
+                    break;
+                case ' ':
+                    e.preventDefault();
+                    togglePlayback();
+                    break;
+                case 'Home':
+                    e.preventDefault();
+                    setCurrentFrame(0);
+                    break;
+                case 'End':
+                    e.preventDefault();
+                    setCurrentFrame(currentFrames.length - 1);
+                    break;
+                case 'r':
+                    resetCamera();
+                    break;
+            }
+        }
+
+        function onWindowResize() {
+            camera.aspect = window.innerWidth / window.innerHeight;
+            camera.updateProjectionMatrix();
+            renderer.setSize(window.innerWidth, window.innerHeight);
+        }
+
+        function animate() {
+            requestAnimationFrame(animate);
+            controls.update();
+            renderer.render(scene, camera);
+        }
+
+        // Load demo data from localStorage
+        function loadDemoData() {
+            const storedData = localStorage.getItem('q3DemoData');
+            if (storedData) {
+                try {
+                    currentFrames = JSON.parse(storedData);
+                    initializeViewer();
+                } catch (error) {
+                    console.error('Error parsing stored data:', error);
+                    showError('Error loading demo data');
+                }
+            } else {
+                showError('No demo data found. Please load a demo from the main viewer first.');
+            }
+        }
+
+        function initializeViewer() {
+            if (currentFrames && currentFrames.length > 0) {
+                document.getElementById('frameSlider').max = currentFrames.length - 1;
+                updatePath();
+                setCurrentFrame(0);
+
+                // Center camera on the path
+                const bounds = calculateBounds();
+                const center = bounds.center;
+                const size = bounds.size;
+
+                camera.position.set(
+                    center.x + size * 0.8,
+                    center.y + size * 0.6,
+                    center.z + size * 0.8
+                );
+                controls.target.copy(center);
+                controls.update();
+            }
+        }
+
+        function calculateBounds() {
+            const box = new THREE.Box3();
+            currentFrames.forEach(frame => {
+                box.expandByPoint(new THREE.Vector3(frame.x, frame.z, frame.y));
+            });
+
+            const center = box.getCenter(new THREE.Vector3());
+            const size = box.getSize(new THREE.Vector3()).length();
+
+            return { center, size };
+        }
+
+        function showError(message) {
+            const container = document.getElementById('threejs-container');
+            container.innerHTML = `
+                <div style="display: flex; align-items: center; justify-content: center; height: 100vh; flex-direction: column;">
+                    <h2 style="color: #f44336;">?? Error</h2>
+                    <p style="color: #fff; text-align: center; max-width: 500px;">${message}</p>
+                    <button onclick="window.history.back()" style="margin-top: 20px;">? Back to Charts</button>
+                </div>
+            `;
+        }
+
+        // Make functions globally accessible for HTML event handlers
+        window.setCurrentFrame = setCurrentFrame;
+        window.togglePlayback = togglePlayback;
+        window.startPlayback = startPlayback;
+        window.stopPlayback = stopPlayback;
+        window.resetCamera = resetCamera;
+        window.setCameraView = setCameraView;
+
+        // Initialize everything when page loads
+        window.addEventListener('load', () => {
+            initThreeJS();
+            loadDemoData();
+        });
+    </script>
+</body>
+
+</html>

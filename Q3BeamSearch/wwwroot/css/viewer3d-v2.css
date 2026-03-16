@@ -1,0 +1,87 @@
+/* ??????????? viewer3d-v2.css ??????????? */
+*{box-sizing:border-box}
+body{font-family:'Segoe UI',Arial,sans-serif;margin:0;padding:0;background:#111;color:#eee;overflow:hidden}
+
+/* ?? Upload Gate ?? */
+.upload-gate{position:fixed;inset:0;display:flex;align-items:center;justify-content:center;background:#111;z-index:9999}
+.upload-gate-inner{text-align:center;max-width:480px;padding:40px}
+.upload-gate-inner h1{font-size:28px;color:#4fc3f7;margin-bottom:4px}
+.upload-gate-inner h1 small{font-size:14px;color:#888;font-weight:400}
+.upload-gate-inner .subtitle{color:#888;margin-bottom:28px;font-size:14px}
+.drop-zone{border:2px dashed #555;border-radius:12px;padding:50px 30px;transition:all .25s;cursor:pointer}
+.drop-zone:hover,.drop-zone.drag-over{border-color:#4fc3f7;background:rgba(79,195,247,.06)}
+.drop-zone-icon{font-size:56px;margin-bottom:12px}
+.drop-zone-text{font-size:16px;margin-bottom:8px}
+.drop-zone-or{color:#666;margin:12px 0}
+.upload-status{margin-top:18px;font-size:13px;color:#ff9800}
+.upload-status.error{color:#f44336}
+.upload-status.ok{color:#4caf50}
+
+/* ?? Buttons ?? */
+.btn-primary{padding:10px 22px;background:#4fc3f7;color:#000;border:none;border-radius:6px;font-weight:600;cursor:pointer;font-size:14px;transition:background .2s}
+.btn-primary:hover{background:#81d4fa}
+button{padding:6px 12px;background:#2a2a2a;color:#ddd;border:1px solid #444;border-radius:4px;cursor:pointer;font-size:12px;transition:all .15s}
+button:hover{background:#3a3a3a;border-color:#666}
+.toggle-btn.active{background:#4fc3f7;color:#000;border-color:#4fc3f7}
+
+/* ?? Viewer container ?? */
+.viewer-container{position:relative;width:100vw;height:100vh}
+
+/* ?? Top bar ?? */
+.top-bar{position:absolute;top:0;left:0;right:0;display:flex;align-items:center;gap:6px;padding:8px 14px;background:rgba(20,20,20,.92);z-index:1000;border-bottom:1px solid #333;flex-wrap:wrap}
+.top-bar .separator{width:1px;height:22px;background:#444;margin:0 4px}
+
+/* ?? Left controls ?? */
+.controls-overlay{position:absolute;top:52px;left:12px;z-index:1000;background:rgba(30,30,30,.94);padding:16px;border-radius:8px;width:310px;max-height:calc(100vh - 70px);overflow-y:auto;backdrop-filter:blur(8px)}
+.controls-overlay h3{margin:0 0 12px;color:#4fc3f7;font-size:15px}
+.control-group{margin-bottom:12px}
+.control-group>label{display:block;margin-bottom:4px;color:#aaa;font-size:12px}
+.control-row{display:flex;gap:6px;align-items:center;margin-bottom:6px}
+.toggle-grid{display:grid;grid-template-columns:1fr 1fr;gap:3px 8px}
+.toggle-grid label{font-size:12px;color:#ccc}
+.frame-display{background:#222;padding:4px 10px;border-radius:4px;font-weight:700;color:#4fc3f7;min-width:90px;text-align:center;font-size:12px}
+input[type="range"]{flex:1;height:5px;background:#333;outline:none;border-radius:3px;accent-color:#4fc3f7}
+
+/* ?? Right info panel ?? */
+.info-panel{position:absolute;top:52px;right:12px;background:rgba(30,30,30,.94);padding:14px;border-radius:8px;min-width:200px;z-index:1000;backdrop-filter:blur(8px)}
+.info-panel h4{margin:0 0 8px;color:#4fc3f7;font-size:14px}
+.info-item{display:flex;justify-content:space-between;margin-bottom:4px;font-size:12px}
+.info-label{color:#999}
+.info-value{color:#eee;font-weight:600}
+
+/* ?? Waypoint panel ?? */
+.waypoint-panel{position:absolute;bottom:14px;left:12px;background:rgba(30,30,30,.94);padding:14px;border-radius:8px;min-width:240px;max-width:340px;z-index:1000;backdrop-filter:blur(8px)}
+.waypoint-panel h4{margin:0 0 8px;color:#4fc3f7;font-size:14px}
+.waypoint-panel h5{margin:4px 0;color:#ff9800;font-size:12px}
+
+/* ?? Script editor panel ?? */
+.script-editor-panel{position:absolute;bottom:14px;right:12px;background:rgba(30,30,30,.94);padding:14px;border-radius:8px;width:360px;max-height:50vh;z-index:1000;backdrop-filter:blur(8px)}
+.script-editor-panel h4{margin:0 0 8px;color:#4fc3f7;font-size:14px}
+#scriptTextArea{width:100%;height:200px;background:#1a1a1a;color:#ccc;border:1px solid #444;border-radius:4px;padding:8px;font-family:'Cascadia Code','Fira Code',monospace;font-size:12px;resize:vertical}
+
+/* ?? Optimizer panel ?? */
+.optimizer-panel{position:absolute;top:52px;right:230px;background:rgba(30,30,30,.94);padding:14px;border-radius:8px;width:260px;z-index:1000;backdrop-filter:blur(8px)}
+.optimizer-panel h4{margin:0 0 8px;color:#4fc3f7;font-size:14px}
+
+/* ?? Legend ?? */
+.legend{position:absolute;bottom:14px;right:12px;background:rgba(30,30,30,.94);padding:12px;border-radius:8px;z-index:999;backdrop-filter:blur(8px)}
+.legend h4{margin:0 0 8px;color:#4fc3f7;font-size:13px}
+.legend-item{display:flex;align-items:center;margin-bottom:3px;font-size:11px}
+.legend-color{width:18px;height:3px;margin-right:8px;border-radius:1px}
+
+/* ?? Frame Editor Panel (injected dynamically) ?? */
+#frameEditorPanel{position:absolute;top:52px;right:230px;width:310px;background:rgba(30,30,30,.94);padding:16px;border-radius:8px;z-index:1001;max-height:65vh;overflow-y:auto;backdrop-filter:blur(8px)}
+#frameEditorPanel h3{margin:0 0 12px;color:#4fc3f7;font-size:15px}
+
+/* ?? Notification toast ?? */
+.notification-toast{position:fixed;top:50%;left:50%;transform:translate(-50%,-50%);background:rgba(79,195,247,.95);color:#000;padding:14px 28px;border-radius:8px;font-weight:700;z-index:20000;animation:fadeInOut 2s ease-in-out forwards;pointer-events:none}
+@keyframes fadeInOut{0%,100%{opacity:0}10%,80%{opacity:1}}
+
+/* ?? Scrollbar ?? */
+::-webkit-scrollbar{width:6px}
+::-webkit-scrollbar-track{background:rgba(0,0,0,.2);border-radius:3px}
+::-webkit-scrollbar-thumb{background:rgba(79,195,247,.4);border-radius:3px}
+::-webkit-scrollbar-thumb:hover{background:rgba(79,195,247,.7)}
+
+/* ?? Responsive ?? */
+@media(max-width:900px){.controls-overlay{width:260px;font-size:11px}.info-panel{min-width:170px}.script-editor-panel{width:300px}}

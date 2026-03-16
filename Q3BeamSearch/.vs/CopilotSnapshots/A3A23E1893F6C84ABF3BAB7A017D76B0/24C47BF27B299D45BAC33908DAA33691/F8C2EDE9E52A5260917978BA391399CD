@@ -1,0 +1,45 @@
+﻿using Q3BeamSearch.Hubs;
+using Q3BeamSearch.Services;
+
+namespace Q3BeamSearch
+{
+    public static class WebMain
+    {
+        public static void Main(string[] args)
+        {
+            var builder = WebApplication.CreateBuilder(args);
+
+            builder.Services.AddSignalR();
+            // On-demand simulation service instead of continuous background loop
+            builder.Services.AddSingleton<DemoSimulationService>();
+
+            builder.Services.AddCors(o =>
+            {
+                o.AddDefaultPolicy(p => p
+                    .AllowAnyHeader()
+                    .AllowAnyMethod()
+                    .AllowCredentials()
+                    .SetIsOriginAllowed(_ => true));
+            });
+
+            var app = builder.Build();
+
+            app.UseCors();
+            app.UseDefaultFiles();
+            app.UseStaticFiles();
+
+            // List saved demos (JSON files in wwwroot/demos)
+            app.MapGet("/demos", () =>
+            {
+                var demosDir = Path.Combine(app.Environment.ContentRootPath, "wwwroot", "demos");
+                if (!Directory.Exists(demosDir)) return Results.Json(Array.Empty<string>());
+                var files = Directory.GetFiles(demosDir, "*.json").Select(Path.GetFileName).OrderByDescending(f => f).ToArray();
+                return Results.Json(files);
+            });
+
+            app.MapHub<SimulationHub>("/sim");
+
+            app.Run();
+        }
+    }
+}

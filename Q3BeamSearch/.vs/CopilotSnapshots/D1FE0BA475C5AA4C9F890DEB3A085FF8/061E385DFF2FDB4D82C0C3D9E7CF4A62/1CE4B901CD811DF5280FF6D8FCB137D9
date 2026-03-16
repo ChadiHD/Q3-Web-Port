@@ -1,0 +1,84 @@
+﻿class FrameEditor {
+    constructor() {
+        this.frames = [];
+        this.currentFrame = 0;
+        this.playerState = this.initializeState();
+    }
+
+    initializeState() {
+        return {
+            pos: [0, 0, 24],
+            vel: [0, 0, 0],
+            angles: [0, 0, 0],
+            onGround: false
+        };
+    }
+
+    // Add frame with input
+    addFrame(input) {
+        const frame = {
+            index: this.frames.length,
+            input: {
+                forward: input.forward || 0,
+                strafe: input.strafe || 0,
+                up: input.up || 0,
+                angles: input.angles || [0, 0, 0]
+            },
+            // Simulate with real Q3 physics
+            stateBefore: { ...this.playerState },
+            stateAfter: null
+        };
+
+        // Call WASM physics
+        frame.stateAfter = Module.simulateFrame(
+            this.playerState,
+            frame.input
+        );
+
+        this.frames.push(frame);
+        this.playerState = frame.stateAfter;
+
+        return frame;
+    }
+
+    // Edit existing frame
+    updateFrame(index, newInput) {
+        // Resimulate from this frame forward
+        this.resimulateFrom(index, newInput);
+    }
+
+    resimulateFrom(startIndex, newInput) {
+        // Reset to state before startIndex
+        if (startIndex > 0) {
+            this.playerState = { ...this.frames[startIndex - 1].stateAfter };
+        } else {
+            this.playerState = this.initializeState();
+        }
+
+        // Update frame at startIndex
+        this.frames[startIndex].input = newInput;
+
+        // Resimulate all subsequent frames
+        for (let i = startIndex; i < this.frames.length; i++) {
+            this.frames[i].stateBefore = { ...this.playerState };
+            this.frames[i].stateAfter = Module.simulateFrame(
+                this.playerState,
+                this.frames[i].input
+            );
+            this.playerState = this.frames[i].stateAfter;
+        }
+    }
+
+    // Export to .cfg or .dm_48 format
+    exportToCfg() {
+        let cfg = "";
+        this.frames.forEach((frame, i) => {
+            cfg += `// Frame ${i}\n`;
+            cfg += `+forward ${frame.input.forward}\n`;
+            cfg += `+strafe ${frame.input.strafe}\n`;
+            cfg += `viewangles ${frame.input.angles.join(' ')}\n`;
+            cfg += `wait\n\n`;
+        });
+        return cfg;
+    }
+}

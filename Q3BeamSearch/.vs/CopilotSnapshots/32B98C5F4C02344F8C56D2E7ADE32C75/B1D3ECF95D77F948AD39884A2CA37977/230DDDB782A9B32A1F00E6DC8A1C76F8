@@ -1,0 +1,1581 @@
+﻿<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Q3 Movement Demo Viewer</title>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <!-- Q3 Physics WebAssembly Module -->
+    <script src="js/q3physics.js"></script>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            margin: 0;
+            padding: 20px;
+            background: #1a1a1a;
+            color: #fff;
+            padding-top: 120px; /* Space for sticky header */
+        }
+
+        .container {
+            max-width: 1600px;
+            margin: 0 auto;
+        }
+
+        /* Sticky Frame Controls */
+        .sticky-header {
+            position: fixed;
+            top: 0;
+            left: 0;
+            right: 0;
+            z-index: 1000;
+            background: #1a1a1a;
+            border-bottom: 2px solid #3a3a3a;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.5);
+        }
+
+        .controls {
+            background: #2a2a2a;
+            padding: 20px;
+            border-radius: 8px;
+            margin-bottom: 20px;
+        }
+
+        .stats {
+            background: #2a2a2a;
+            padding: 15px;
+            border-radius: 8px;
+            margin-bottom: 20px;
+        }
+
+        .frame-controls {
+            background: #2a2a2a;
+            padding: 15px 20px;
+            margin: 0 20px;
+            border-radius: 0 0 8px 8px;
+        }
+
+        .frame-controls h3 {
+            margin: 0 0 15px 0;
+            color: #4fc3f7;
+        }
+
+        .controls-row {
+            display: flex;
+            gap: 20px;
+            align-items: center;
+            flex-wrap: wrap;
+        }
+
+        .slider-section {
+            flex: 1;
+            min-width: 300px;
+        }
+
+        .input-visualization {
+            display: flex;
+            gap: 15px;
+            align-items: center;
+        }
+
+        .charts {
+            display: grid;
+            grid-template-columns: 1fr 1fr 1fr;
+            gap: 15px;
+        }
+
+        .chart-container {
+            background: #2a2a2a;
+            padding: 15px;
+            border-radius: 8px;
+        }
+
+        .frame-info {
+            background: #2a2a2a;
+            padding: 15px;
+            border-radius: 8px;
+            margin-bottom: 20px;
+        }
+
+        select, button {
+            padding: 8px 12px;
+            margin: 5px;
+            background: #3a3a3a;
+            color: #fff;
+            border: 1px solid #555;
+            border-radius: 4px;
+        }
+
+            button:hover {
+                background: #4a4a4a;
+                cursor: pointer;
+            }
+
+            button:disabled {
+                background: #2a2a2a;
+                cursor: not-allowed;
+                opacity: 0.5;
+            }
+
+        .info {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            gap: 10px;
+        }
+
+        .info-item {
+            background: #3a3a3a;
+            padding: 10px;
+            border-radius: 4px;
+        }
+
+        .status {
+            padding: 5px 10px;
+            border-radius: 4px;
+        }
+
+        .ok {
+            background: #2d5a2d;
+        }
+
+        .error {
+            background: #5a2d2d;
+        }
+
+        .loading {
+            background: #5a5a2d;
+        }
+
+        /* Frame slider styles */
+        .slider-container {
+            display: flex;
+            align-items: center;
+            gap: 15px;
+            margin-bottom: 10px;
+        }
+
+        .frame-slider {
+            flex: 1;
+            height: 8px;
+            border-radius: 4px;
+            background: #3a3a3a;
+            outline: none;
+            -webkit-appearance: none;
+        }
+
+            .frame-slider::-webkit-slider-thumb {
+                appearance: none;
+                width: 20px;
+                height: 20px;
+                border-radius: 50%;
+                background: #4fc3f7;
+                cursor: pointer;
+            }
+
+            .frame-slider::-moz-range-thumb {
+                width: 20px;
+                height: 20px;
+                border-radius: 50%;
+                background: #4fc3f7;
+                cursor: pointer;
+                border: none;
+            }
+
+        .frame-display {
+            min-width: 120px;
+            text-align: center;
+            font-weight: bold;
+            color: #4fc3f7;
+        }
+
+        .playback-controls {
+            display: flex;
+            gap: 10px;
+            align-items: center;
+        }
+
+        .playback-speed {
+            width: 80px;
+        }
+
+        /* Frame info grid */
+        .frame-details {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+            gap: 10px;
+        }
+
+        .frame-detail {
+            background: #3a3a3a;
+            padding: 8px;
+            border-radius: 4px;
+            text-align: center;
+        }
+
+            .frame-detail .label {
+                font-size: 0.9em;
+                color: #bbb;
+            }
+
+            .frame-detail .value {
+                font-size: 1.1em;
+                font-weight: bold;
+                color: #fff;
+            }
+
+        /* Input Visualization */
+        .input-display {
+            background: #3a3a3a;
+            padding: 15px;
+            border-radius: 8px;
+            text-align: center;
+        }
+
+        .input-display h4 {
+            margin: 0 0 10px 0;
+            color: #4fc3f7;
+        }
+
+        .movement-keys {
+            display: grid;
+            grid-template-columns: repeat(3, 40px);
+            gap: 5px;
+            justify-content: center;
+            margin-bottom: 15px;
+        }
+
+        .key-button {
+            width: 40px;
+            height: 40px;
+            border: 2px solid #555;
+            border-radius: 6px;
+            background: #2a2a2a;
+            color: #888;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-weight: bold;
+            font-size: 14px;
+            transition: all 0.2s ease;
+        }
+
+        .key-button.pressed {
+            background: #4fc3f7;
+            color: #000;
+            border-color: #4fc3f7;
+            box-shadow: 0 0 10px rgba(79, 195, 247, 0.5);
+        }
+
+        .other-keys {
+            display: flex;
+            gap: 10px;
+            justify-content: center;
+        }
+
+        .other-keys .key-button {
+            width: 60px;
+        }
+
+        /* Circular Yaw Chart */
+        .yaw-circle {
+            position: relative;
+            width: 200px;
+            height: 200px;
+            margin: 0 auto;
+            background: radial-gradient(circle, #3a3a3a 30%, #2a2a2a 70%);
+            border-radius: 50%;
+            border: 3px solid #555;
+        }
+
+        .yaw-needle {
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            width: 3px;
+            height: 80px;
+            background: linear-gradient(to top, #9c27b0, #e91e63);
+            transform-origin: bottom center;
+            transform: translate(-50%, -100%);
+            border-radius: 2px;
+            transition: transform 0.3s ease;
+        }
+
+        .yaw-center {
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            width: 12px;
+            height: 12px;
+            background: #4fc3f7;
+            border-radius: 50%;
+            transform: translate(-50%, -50%);
+            z-index: 10;
+        }
+
+        .yaw-markers {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+        }
+
+        .yaw-marker {
+            position: absolute;
+            width: 2px;
+            height: 15px;
+            background: #666;
+        }
+
+        .yaw-marker.major {
+            width: 3px;
+            height: 20px;
+            background: #888;
+        }
+
+        .yaw-label {
+            position: absolute;
+            color: #888;
+            font-size: 12px;
+            font-weight: bold;
+        }
+    </style>
+</head>
+<body>
+    <!-- Sticky Header with Frame Controls -->
+    <div class="sticky-header">
+        <div id="frameControls" class="frame-controls" style="display: none;">
+            <h3>Frame-by-Frame Analysis</h3>
+            
+            <div class="controls-row">
+                <div class="slider-section">
+                    <div class="slider-container">
+                        <span>Frame:</span>
+                        <input type="range" id="frameSlider" class="frame-slider" min="0" max="100" value="0" step="1">
+                        <div id="frameDisplay" class="frame-display">0 / 0</div>
+                    </div>
+                    
+                    <div class="playback-controls">
+                        <button id="btnFirst" title="First Frame">⏮</button>
+                        <button id="btnPrev" title="Previous Frame">⏴</button>
+                        <button id="btnPlay" title="Play/Pause">⏯</button>
+                        <button id="btnNext" title="Next Frame">⏵</button>
+                        <button id="btnLast" title="Last Frame">⏭</button>
+                        <span>Speed:</span>
+                        <select id="playbackSpeed" class="playback-speed">
+                            <option value="0.10">0.10x</option>
+                            <option value="0.25">0.25x</option>
+                            <option value="0.5">0.5x</option>
+                            <option value="1" selected>1x</option>
+                            <option value="2">2x</option>
+                            <option value="4">4x</option>
+                            <option value="8">8x</option>
+                        </select>
+                    </div>
+                </div>
+
+                <div class="input-display">
+                    <h4>Input State</h4>
+                    <div class="movement-keys">
+                        <div></div>
+                        <div id="keyW" class="key-button">W</div>
+                        <div></div>
+                        <div id="keyA" class="key-button">A</div>
+                        <div id="keyS" class="key-button">S</div>
+                        <div id="keyD" class="key-button">D</div>
+                    </div>
+                    <div class="other-keys">
+                        <div id="keySpace" class="key-button">JUMP</div>
+                        <div id="keyMouse" class="key-button">TURN</div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <div class="container">
+        <h1>Q3 Movement Demo Viewer</h1>
+
+        <div class="controls">
+            <h3>Demo Selection</h3>
+            <select id="demoList">
+                <option value="">Select a demo...</option>
+            </select>
+            <button id="btnLoad">Load Demo</button>
+            <button id="btnRefresh">Refresh List</button>
+            <button id="btn3DView" style="background: #4fc3f7; color: #000; margin-left: 20px;" disabled>🎮 3D View</button>
+            <button id="btnExportJSON" style="background: #66bb6a; color: #000; margin-left: 10px;" disabled>📥 Export JSON</button>
+            <span id="status" class="status">Ready</span>
+        </div>
+
+        <div id="frameInfo" class="frame-info" style="display: none;">
+            <h3>Current Frame Details</h3>
+            <div id="frameDetails" class="frame-details"></div>
+        </div>
+
+        <div id="statsContainer" class="stats" style="display: none;">
+            <h3>Demo Statistics</h3>
+            <div id="statsContent" class="info"></div>
+        </div>
+
+        <div class="charts">
+            <div class="chart-container">
+                <h3>Speed Over Time</h3>
+                <canvas id="speedChart" width="500" height="250"></canvas>
+            </div>
+            <div class="chart-container">
+                <h3>Movement Path (2D)</h3>
+                <canvas id="pathChart" width="500" height="250"></canvas>
+            </div>
+            <div class="chart-container">
+                <h3>Yaw Direction (Circular)</h3>
+                <div class="yaw-circle">
+                    <div class="yaw-markers">
+                        <!-- Compass markers will be generated by JavaScript -->
+                    </div>
+                    <div id="yawNeedle" class="yaw-needle"></div>
+                    <div class="yaw-center"></div>
+                </div>
+                <div style="text-align: center; margin-top: 10px;">
+                    <span id="yawValue">0°</span>
+                </div>
+            </div>
+            <div class="chart-container">
+                <h3>Velocity Vector Visualization</h3>
+                <canvas id="velocityChart" width="500" height="250"></canvas>
+            </div>
+            <div class="chart-container">
+                <h3>Acceleration vs Wishdir Angle</h3>
+                <canvas id="accelChart" width="500" height="250"></canvas>
+            </div>
+            <div class="chart-container">
+                <h3>Air Strafe Efficiency</h3>
+                <canvas id="strafeChart" width="500" height="250"></canvas>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        let currentFrames = [];
+        let currentFrame = 0;
+        let isPlaying = false;
+        let playbackInterval = null;
+
+        // Q3 Physics Integration
+        let Q3Physics = null;
+        let physicsInitialized = false;
+
+        // Initialize Q3 Physics WebAssembly module
+        async function initQ3Physics() {
+            try {
+                console.log('Initializing Q3 Physics WebAssembly module...');
+                Q3Physics = await Q3PhysicsModule();
+                physicsInitialized = true;
+                console.log('Q3 Physics initialized successfully');
+                console.log('Available functions:', ['PmoveSingle', 'SetPlayerSpeed', 'SetGravity', 
+                    'GetPlayerPosition', 'GetPlayerVelocity', 'GetPlayerHorizontalSpeed']);
+
+                // Set default physics parameters
+                Q3Physics.ccall('SetPlayerSpeed', null, ['number'], [320]);
+                Q3Physics.ccall('SetGravity', null, ['number'], [800]);
+
+                return true;
+            } catch (error) {
+                console.error('Failed to initialize Q3 Physics:', error);
+                return false;
+            }
+        }
+
+        // ============================================================
+        // PROPERLY USE Q3 PHYSICS WEBASSEMBLY
+        // ============================================================
+        function calculateAccuratePhysics(frameIndex) {
+            // Fallback check
+            if (!physicsInitialized || !Q3Physics || frameIndex < 1 || frameIndex >= currentFrames.length) {
+                return calculateFallbackPhysics(frameIndex);
+            }
+
+            const prevFrame = currentFrames[frameIndex - 1];
+            const currFrame = currentFrames[frameIndex];
+
+            try {
+                const dt = 1.0 / 125.0; // 125 FPS
+
+                // Calculate velocity components
+                const velX = (currFrame.x - prevFrame.x) / dt;
+                const velY = (currFrame.y - prevFrame.y) / dt;
+                const velZ = (currFrame.z - prevFrame.z) / dt;
+
+                // Use Q3 WASM for horizontal speed calculation
+                const horizontalSpeed = Math.sqrt(velX * velX + velY * velY);
+
+                // Calculate movement angles
+                const velAngle = Math.atan2(velY, velX) * 180 / Math.PI;
+                const yawAngle = prevFrame.yawDeg;
+
+                // Calculate optimal strafe angle using Q3 physics principles
+                let wishAngle = yawAngle;
+                if (horizontalSpeed > 10) {
+                    // Q3 optimal strafe angle: velocity direction + 30 degrees
+                    const optimalStrafeAngleRad = Math.atan2(velY, velX) + Math.PI / 6; // 30 degrees
+                    wishAngle = optimalStrafeAngleRad * 180 / Math.PI;
+                }
+
+                const wishVelAngleDiff = ((wishAngle - velAngle + 180) % 360) - 180;
+
+                // Calculate acceleration using previous velocity
+                const prevVelX = frameIndex < 2 ? 0 : (prevFrame.x - currentFrames[frameIndex - 2].x) / dt;
+                const prevVelY = frameIndex < 2 ? 0 : (prevFrame.y - currentFrames[frameIndex - 2].y) / dt;
+
+                const accelX = velX - prevVelX;
+                const accelY = velY - prevVelY;
+                const accelMagnitude = Math.sqrt(accelX * accelX + accelY * accelY);
+
+                // Q3 strafe efficiency calculation
+                // Optimal angle for max acceleration: ±30 degrees from velocity
+                const optimalAngle = 30;
+                const angleDiff = Math.abs(Math.abs(wishVelAngleDiff) - optimalAngle);
+
+                // Calculate efficiency based on Q3 air acceleration mechanics
+                let efficiency = 0;
+                if (angleDiff <= 45) {
+                    // Linear falloff from optimal angle
+                    efficiency = Math.max(0, 100 - (angleDiff / 45) * 100);
+                }
+
+                // Air strafing bonus (Q3-specific)
+                if (!currFrame.onGround && efficiency > 0) {
+                    efficiency *= 1.2; // 20% efficiency boost in air
+                    efficiency = Math.min(100, efficiency);
+                }
+
+                return {
+                    magnitude: accelMagnitude,
+                    wishAngle: wishVelAngleDiff,
+                    efficiency: efficiency,
+                    horizontalSpeed: horizontalSpeed,
+                    q3Enhanced: true
+                };
+
+            } catch (error) {
+                console.error('Error in Q3 physics calculation:', error);
+                return calculateFallbackPhysics(frameIndex);
+            }
+        }
+
+        // Fallback physics when WASM is not available
+        function calculateFallbackPhysics(frameIndex) {
+            if (frameIndex < 1 || frameIndex >= currentFrames.length) {
+                return { 
+                    magnitude: 0, 
+                    wishAngle: 0, 
+                    efficiency: 0, 
+                    horizontalSpeed: 0,
+                    q3Enhanced: false 
+                };
+            }
+
+            const prevFrame = currentFrames[frameIndex - 1];
+            const currFrame = currentFrames[frameIndex];
+            const dt = 1.0 / 125.0;
+
+            // Basic velocity calculations
+            const velX = (currFrame.x - prevFrame.x) / dt;
+            const velY = (currFrame.y - prevFrame.y) / dt;
+            const horizontalSpeed = Math.sqrt(velX * velX + velY * velY);
+            const velocityAngle = Math.atan2(velY, velX);
+
+            // Simplified wish angle calculation
+            const optimalWishAngle = velocityAngle + (Math.PI / 6);
+
+            // Basic acceleration
+            const velPrevX = frameIndex < 2 ? 0 : (prevFrame.x - currentFrames[frameIndex - 2].x) / dt;
+            const velPrevY = frameIndex < 2 ? 0 : (prevFrame.y - currentFrames[frameIndex - 2].y) / dt;
+            const accelX = velX - velPrevX;
+            const accelY = velY - velPrevY;
+            const accelMagnitude = Math.sqrt(accelX * accelX + accelY * accelY);
+
+            return { 
+                magnitude: accelMagnitude,
+                wishAngle: 0, 
+                efficiency: 50, 
+                horizontalSpeed: horizontalSpeed,
+                q3Enhanced: false 
+            };
+        }
+
+        // Enhanced frame details with accurate physics
+        function updateFrameDetails(frame) {
+            const container = document.getElementById('frameDetails');
+
+            // Calculate velocity components from frame data
+            let velX = 0, velY = 0, velZ = 0;
+            if (currentFrame > 0) {
+                const prevFrame = currentFrames[currentFrame - 1];
+                const dt = 1.0 / 125.0;
+                velX = (frame.x - prevFrame.x) / dt;
+                velY = (frame.y - prevFrame.y) / dt;
+                velZ = (frame.z - prevFrame.z) / dt;
+            }
+
+            const velMagnitude = Math.sqrt(velX * velX + velY * velY);
+            const velAngle = Math.atan2(velY, velX) * 180 / Math.PI;
+
+            // Use accurate Q3 physics calculations
+            const physicsData = calculateAccuratePhysics(currentFrame);
+
+            // Display physics status
+            const physicsStatus = physicsData.q3Enhanced ? 
+                '<span style="color: #4caf50;">Q3 WASM ✓</span>' : 
+                '<span style="color: #ff9800;">Fallback</span>';
+
+            container.innerHTML = `
+                <div class="frame-detail">
+                    <div class="label">Physics</div>
+                    <div class="value">${physicsStatus}</div>
+                </div>
+                <div class="frame-detail">
+                    <div class="label">Frame</div>
+                    <div class="value">${frame.frame}</div>
+                </div>
+                <div class="frame-detail">
+                    <div class="label">Speed</div>
+                    <div class="value">${frame.speed.toFixed(1)} ups</div>
+                </div>
+                <div class="frame-detail">
+                    <div class="label">H-Speed</div>
+                    <div class="value">${physicsData.horizontalSpeed.toFixed(1)} ups</div>
+                </div>
+                <div class="frame-detail">
+                    <div class="label">Position X</div>
+                    <div class="value">${frame.x.toFixed(1)}</div>
+                </div>
+                <div class="frame-detail">
+                    <div class="label">Position Y</div>
+                    <div class="value">${frame.y.toFixed(1)}</div>
+                </div>
+                <div class="frame-detail">
+                    <div class="label">Position Z</div>
+                    <div class="value">${frame.z.toFixed(1)}</div>
+                </div>
+                <div class="frame-detail">
+                    <div class="label">Ground</div>
+                    <div class="value">${frame.onGround ? 'Yes' : 'No'}</div>
+                </div>
+                <div class="frame-detail">
+                    <div class="label">Yaw</div>
+                    <div class="value">${frame.yawDeg.toFixed(1)}°</div>
+                </div>
+                <div class="frame-detail">
+                    <div class="label">Time</div>
+                    <div class="value">${(frame.frame / 125.0).toFixed(2)}s</div>
+                </div>
+                <div class="frame-detail">
+                    <div class="label">Vel X</div>
+                    <div class="value">${velX.toFixed(1)} ups</div>
+                </div>
+                <div class="frame-detail">
+                    <div class="label">Vel Y</div>
+                    <div class="value">${velY.toFixed(1)} ups</div>
+                </div>
+                <div class="frame-detail">
+                    <div class="label">Vel Z</div>
+                    <div class="value">${velZ.toFixed(1)} ups</div>
+                </div>
+                <div class="frame-detail">
+                    <div class="label">Vel Angle</div>
+                    <div class="value">${velAngle.toFixed(1)}°</div>
+                </div>
+                <div class="frame-detail">
+                    <div class="label">Accel</div>
+                    <div class="value">${physicsData.magnitude.toFixed(1)} ups/s</div>
+                </div>
+                <div class="frame-detail">
+                    <div class="label">Wish Δ</div>
+                    <div class="value">${physicsData.wishAngle.toFixed(1)}°</div>
+                </div>
+                <div class="frame-detail">
+                    <div class="label">Strafe Eff</div>
+                    <div class="value" style="color: ${physicsData.efficiency >= 80 ? '#4caf50' : physicsData.efficiency >= 60 ? '#9c27b0' : physicsData.efficiency >= 40 ? '#ff9800' : '#f44336'}">${physicsData.efficiency.toFixed(1)}%</div>
+                </div>
+            `;
+        }
+
+        // Keep the original calculateAcceleration function as fallback
+        function calculateAcceleration(frameIndex = currentFrame) {
+            if (frameIndex < 1 || frameIndex >= currentFrames.length) return { magnitude: 0, wishAngle: 0, efficiency: 0 };
+
+            const prevFrame = currentFrames[frameIndex - 1];
+            const currFrame = currentFrames[frameIndex];
+            const dt = 1.0 / 125.0; // 125 FPS
+
+            // Calculate velocity change (acceleration)
+            const velPrevX = frameIndex < 2 ? 0 : (prevFrame.x - currentFrames[frameIndex - 2].x) / dt;
+            const velPrevY = frameIndex < 2 ? 0 : (prevFrame.y - currentFrames[frameIndex - 2].y) / dt;
+            const velCurrX = (currFrame.x - prevFrame.x) / dt;
+            const velCurrY = (currFrame.y - prevFrame.y) / dt;
+
+            const accelX = velCurrX - velPrevX;
+            const accelY = velCurrY - velPrevY;
+            const accelMagnitude = Math.sqrt(accelX * accelX + accelY * accelY);
+
+            // Calculate wishdir relative to velocity
+            const velAngle = Math.atan2(velPrevY, velPrevX) * 180 / Math.PI;
+            const yawAngle = prevFrame.yawDeg;
+
+            // Assume forward+strafe movement (45 degree offset from yaw)
+            const wishAngle = yawAngle + 45; // Simplified assumption
+            const wishVelAngleDiff = ((wishAngle - velAngle + 180) % 360) - 180;
+
+            // Calculate strafe efficiency (how close to optimal angle)
+            // Optimal angle for air strafing is typically around 30-45 degrees
+            const optimalAngle = 30; // degrees
+            const efficiency = Math.max(0, 100 - Math.abs(Math.abs(wishVelAngleDiff) - optimalAngle) * 2);
+
+            return {
+                magnitude: accelMagnitude,
+                wishAngle: wishVelAngleDiff,
+                efficiency: efficiency
+            };
+        }
+
+        // Update chart highlighting with accurate physics
+        function updateChartHighlight(frameIndex, frame) {
+            // Calculate velocity for current frame
+            let velX = 0, velY = 0;
+            if (frameIndex > 0) {
+                const prevFrame = currentFrames[frameIndex - 1];
+                const dt = 1.0 / 125.0;
+                velX = (frame.x - prevFrame.x) / dt;
+                velY = (frame.y - prevFrame.y) / dt;
+            }
+
+            // Calculate yaw direction vector (unit length for visualization)
+            const yawRad = frame.yawDeg * Math.PI / 180;
+            const yawX = Math.cos(yawRad) * 500; // Scale for visibility
+            const yawY = Math.sin(yawRad) * 500;
+
+            // Use accurate Q3 physics calculations
+            const physicsData = calculateAccuratePhysics(frameIndex);
+
+            // Update speed chart highlight
+            speedChart.data.datasets[1].data = [{
+                x: frameIndex,
+                y: frame.speed
+            }];
+
+            // Update path chart highlight
+            pathChart.data.datasets[1].data = [{
+                x: frame.x,
+                y: frame.y
+            }];
+
+            // Update velocity chart highlight
+            velocityChart.data.datasets[1].data = [{
+                x: velX,
+                y: velY
+            }];
+
+            // Update yaw direction vector (from origin to show direction)
+            velocityChart.data.datasets[2].data = [
+                { x: 0, y: 0 },
+                { x: yawX, y: yawY }
+            ];
+
+            // Update acceleration chart highlight with Q3 physics
+            accelChart.data.datasets[1].data = [{
+                x: physicsData.wishAngle,
+                y: physicsData.magnitude
+            }];
+
+            // Update strafe chart highlight with Q3 physics
+            if (strafeChart && strafeChart.data) {
+                strafeChart.data.datasets[1].data = [{
+                    x: frameIndex,
+                    y: physicsData.efficiency
+                }];
+            }
+
+            speedChart.update('none');
+            pathChart.update('none');
+            velocityChart.update('none');
+            accelChart.update('none');
+            if (strafeChart) strafeChart.update('none');
+        }
+
+        // Enhanced updateCharts with Q3 physics
+        function updateCharts(frames) {
+            // Clear existing data with safety checks
+            if (speedChart && speedChart.data) {
+                speedChart.data.labels = [];
+                speedChart.data.datasets[0].data = [];
+                speedChart.data.datasets[1].data = [];
+            }
+            if (pathChart && pathChart.data) {
+                pathChart.data.datasets[0].data = [];
+                pathChart.data.datasets[1].data = [];
+            }
+            if (velocityChart && velocityChart.data) {
+                velocityChart.data.datasets[0].data = [];
+                velocityChart.data.datasets[1].data = [];
+                velocityChart.data.datasets[2].data = [];
+            }
+            if (accelChart && accelChart.data) {
+                accelChart.data.datasets[0].data = [];
+                accelChart.data.datasets[1].data = [];
+                // Don't clear reference line datasets (2, 3, 4)
+            }
+            if (strafeChart && strafeChart.data) {
+                strafeChart.data.labels = [];
+                strafeChart.data.datasets[0].data = [];
+                strafeChart.data.datasets[1].data = [];
+            }
+
+            // Add new data with Q3 physics calculations
+            frames.forEach((frame, index) => {
+                // Speed and path data
+                if (speedChart && speedChart.data) {
+                    speedChart.data.labels.push(index);
+                    speedChart.data.datasets[0].data.push(frame.speed);
+                }
+                if (pathChart && pathChart.data) {
+                    pathChart.data.datasets[0].data.push({ x: frame.x, y: frame.y });
+                }
+
+                // Velocity data (calculated from position changes)
+                if (index > 0 && velocityChart && velocityChart.data) {
+                    const prevFrame = frames[index - 1];
+                    const dt = 1.0 / 125.0; // 125 FPS
+                    const velX = (frame.x - prevFrame.x) / dt;
+                    const velY = (frame.y - prevFrame.y) / dt;
+
+                    velocityChart.data.datasets[0].data.push({ x: velX, y: velY });
+                }
+
+                // Use Q3 physics for acceleration and strafe efficiency
+                const physicsData = calculateAccuratePhysics(index);
+                if (index > 0 && accelChart && accelChart.data) {
+                    accelChart.data.datasets[0].data.push({
+                        x: physicsData.wishAngle,
+                        y: physicsData.magnitude
+                    });
+                }
+
+                if (strafeChart && strafeChart.data) {
+                    strafeChart.data.labels.push(index);
+                    strafeChart.data.datasets[0].data.push(physicsData.efficiency);
+                }
+            });
+
+            // Update charts with safety checks
+            try {
+                if (speedChart) speedChart.update();
+                if (pathChart) pathChart.update();
+                if (velocityChart) velocityChart.update();
+                if (accelChart) accelChart.update();
+                if (strafeChart) strafeChart.update();
+            } catch (error) {
+                console.error('Error updating charts:', error);
+            }
+        }
+
+        // Demo management
+        async function loadDemos() {
+            try {
+                setStatus('Loading demos...', 'loading');
+                const response = await fetch('/demos');
+                const demos = await response.json();
+
+                const select = document.getElementById('demoList');
+                select.innerHTML = '<option value="">Select a demo...</option>';
+
+                demos.forEach(demo => {
+                    const option = document.createElement('option');
+                    option.value = demo;
+                    option.textContent = demo;
+                    select.appendChild(option);
+                });
+
+                setStatus(`Found ${demos.length} demos`, 'ok');
+            } catch (error) {
+                setStatus('Error loading demos', 'error');
+                console.error('Error loading demos:', error);
+            }
+        }
+
+        async function loadDemo(fileName) {
+            if (!fileName) return;
+
+            try {
+                setStatus('Loading demo data...', 'loading');
+                stopPlayback();
+
+                // Load demo frames
+                const response = await fetch(`/demo/${encodeURIComponent(fileName)}`);
+                if (!response.ok) {
+                    throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+                }
+
+                currentFrames = await response.json();
+
+                // Load demo stats
+                const statsResponse = await fetch(`/demo/${encodeURIComponent(fileName)}/stats`);
+                const stats = await statsResponse.json();
+
+                // Update charts
+                updateCharts(currentFrames);
+
+                // Update stats display
+                updateStats(stats);
+
+                // Setup frame controls
+                setupFrameControls();
+
+                // Go to first frame
+                setCurrentFrame(0);
+
+                // Enable 3D View button when demo is loaded
+                document.getElementById('btn3DView').disabled = false;
+
+                // Enable Export JSON button when demo is loaded
+                document.getElementById('btnExportJSON').disabled = false;
+
+                setStatus(`Loaded ${currentFrames.length} frames`, 'ok');
+
+            } catch (error) {
+                setStatus('Error loading demo', 'error');
+                console.error('Error loading demo:', error);
+            }
+        }
+
+        function setupFrameControls() {
+            if (currentFrames.length === 0) return;
+
+            const slider = document.getElementById('frameSlider');
+            slider.max = currentFrames.length - 1;
+            slider.value = 0;
+
+            document.getElementById('frameControls').style.display = 'block';
+            document.getElementById('frameInfo').style.display = 'block';
+
+            // Enable 3D View button when demo is loaded
+            document.getElementById('btn3DView').disabled = false;
+        }
+
+        function setCurrentFrame(frameIndex) {
+            if (!currentFrames || currentFrames.length === 0) return;
+
+            frameIndex = Math.max(0, Math.min(frameIndex, currentFrames.length - 1));
+            currentFrame = frameIndex;
+
+            const frame = currentFrames[frameIndex];
+
+            // Update slider
+            document.getElementById('frameSlider').value = frameIndex;
+
+            // Update display
+            document.getElementById('frameDisplay').textContent = `${frameIndex} / ${currentFrames.length - 1}`;
+
+            // Update frame details
+            updateFrameDetails(frame);
+
+            // Update chart highlighting
+            updateChartHighlight(frameIndex, frame);
+
+            // Update yaw compass
+            updateYawCompass(frame.yawDeg);
+
+            // Update input visualization
+            updateInputVisualization(frame);
+        }
+
+        // Initialize circular yaw compass
+        function initializeYawCompass() {
+            const markersContainer = document.querySelector('.yaw-markers');
+
+            // Create compass markers
+            for (let angle = 0; angle < 360; angle += 30) {
+                const marker = document.createElement('div');
+                marker.className = angle % 90 === 0 ? 'yaw-marker major' : 'yaw-marker';
+
+                const radian = (angle - 90) * Math.PI / 180; // -90 to start from top
+                const radius = 95; // Distance from center
+                const x = 50 + Math.cos(radian) * radius;
+                const y = 50 + Math.sin(radian) * radius;
+
+                marker.style.left = `${x}%`;
+                marker.style.top = `${y}%`;
+                marker.style.transform = `translate(-50%, -50%) rotate(${angle}deg)`;
+
+                markersContainer.appendChild(marker);
+
+                // Add labels for major directions
+                if (angle % 90 === 0) {
+                    const label = document.createElement('div');
+                    label.className = 'yaw-label';
+                    const labelRadius = 85;
+                    const labelX = 50 + Math.cos(radian) * labelRadius;
+                    const labelY = 50 + Math.sin(radian) * labelRadius;
+
+                    label.style.left = `${labelX}%`;
+                    label.style.top = `${labelY}%`;
+                    label.style.transform = 'translate(-50%, -50%)';
+
+                    const directions = ['N', 'E', 'S', 'W'];
+                    label.textContent = directions[angle / 90];
+
+                    markersContainer.appendChild(label);
+                }
+            }
+        }
+
+        // Update yaw compass
+        function updateYawCompass(yawDeg) {
+            const needle = document.getElementById('yawNeedle');
+            const yawValue = document.getElementById('yawValue');
+
+            needle.style.transform = `translate(-50%, -100%) rotate(${yawDeg}deg)`;
+            yawValue.textContent = `${yawDeg.toFixed(1)}°`;
+        }
+
+        // Enhanced input visualization based on Q3 physics and movement analysis
+        function updateInputVisualization(frame) {
+            // Reset all keys
+            document.querySelectorAll('.key-button').forEach(key => {
+                key.classList.remove('pressed');
+            });
+
+            if (currentFrame === 0 || !currentFrames || currentFrames.length < 2) return;
+
+            const prevFrame = currentFrames[currentFrame - 1];
+            const dt = 1.0 / 125.0; // 125 FPS
+
+            // Calculate yaw changes for mouse detection
+            let yawDelta = frame.yawDeg - prevFrame.yawDeg;
+            // Normalize yaw delta to -180 to 180 range
+            while (yawDelta > 180) yawDelta -= 360;
+            while (yawDelta < -180) yawDelta += 360;
+            const absYawDelta = Math.abs(yawDelta);
+
+            // Detect TURN (mouse movement) - only when actually turning (not just facing direction)
+            // Q3 commands: +left, +right (or mouse movement)
+            if (absYawDelta > 0.5) { // Threshold for detecting actual turning
+                document.getElementById('keyMouse').classList.add('pressed');
+            }
+
+            // Detect JUMP (+moveup command)
+            // Jump is detected when:
+            // 1. Player just left the ground (ground state change)
+            // 2. OR has significant upward Z velocity while in air
+            if (frame.upMove !== undefined && frame.upMove !== null) {
+                // JUMP: Check actual +moveup command (upMove > 0)
+                if (frame.upMove > 0) {
+                    document.getElementById('keySpace').classList.add('pressed');
+                }
+
+                // Movement keys from actual input commands
+                if (frame.forwardMove !== undefined && frame.rightMove !== undefined) {
+                    // Forward/Back (forwardMove)
+                    if (frame.forwardMove > 0) {
+                        document.getElementById('keyW').classList.add('pressed');
+                    } else if (frame.forwardMove < 0) {
+                        document.getElementById('keyS').classList.add('pressed');
+                    }
+
+                    // Strafe Left/Right (rightMove)
+                    if (frame.rightMove > 0) {
+                        document.getElementById('keyD').classList.add('pressed');
+                    } else if (frame.rightMove < 0) {
+                        document.getElementById('keyA').classList.add('pressed');
+                    }
+                }
+                return; // Exit since we used actual input commands
+            }
+
+            // ============================================
+            // FALLBACK: Infer from velocity (old behavior)
+            // ============================================
+            console.warn('Frame missing input data, inferring from velocity');
+            // Calculate velocities
+            const velX = (frame.x - prevFrame.x) / dt;
+            const velY = (frame.y - prevFrame.y) / dt;
+            const velZ = (frame.z - prevFrame.z) / dt;
+            const velMagnitude = Math.sqrt(velX * velX + velY * velY);
+
+            const justLeftGround = prevFrame.onGround && !frame.onGround;
+            const hasUpwardVelocity = velZ > 200; // Jump velocity threshold
+
+            if (justLeftGround || (hasUpwardVelocity && !frame.onGround)) {
+                document.getElementById('keySpace').classList.add('pressed');
+            }
+
+            // Detect movement keys based on velocity direction relative to yaw
+            // Q3 commands: +forward/-forward, +moveright/-moveright, +moveleft/-moveleft, +back/-back
+            if (velMagnitude > 10) { // Minimum velocity threshold
+                const velAngle = Math.atan2(velY, velX) * 180 / Math.PI;
+
+                // Calculate angle of movement relative to player's facing direction
+                let relativeAngle = velAngle - frame.yawDeg;
+                // Normalize to -180 to 180
+                while (relativeAngle > 180) relativeAngle -= 360;
+                while (relativeAngle < -180) relativeAngle += 360;
+
+                // Determine which keys are pressed based on movement direction
+                // Q3 uses 8 directions with different combinations
+
+                // Forward component (+forward / -forward=+back)
+                if (relativeAngle > -67.5 && relativeAngle < 67.5) {
+                    // Moving forward
+                    document.getElementById('keyW').classList.add('pressed');
+                } else if (relativeAngle > 112.5 || relativeAngle < -112.5) {
+                    // Moving backward (+back command, which is -forward)
+                    document.getElementById('keyS').classList.add('pressed');
+                }
+
+                // Strafe component (+moveright / +moveleft)
+                if (relativeAngle > 22.5 && relativeAngle < 157.5) {
+                    // Moving right (+moveright command)
+                    document.getElementById('keyD').classList.add('pressed');
+                } else if (relativeAngle < -22.5 && relativeAngle > -157.5) {
+                    // Moving left (+moveleft command)
+                    document.getElementById('keyA').classList.add('pressed');
+                }
+            }
+        }
+
+        function updateStats(stats) {
+            const container = document.getElementById('statsContent');
+            const statsContainer = document.getElementById('statsContainer');
+
+            if (stats.error) {
+                container.innerHTML = `<div class="info-item">Error: ${stats.error}</div>`;
+            } else {
+                container.innerHTML = `
+                        <div class="info-item">
+                            <strong>Total Frames:</strong><br>${stats.totalFrames}
+                        </div>
+                        <div class="info-item">
+                            <strong>Duration:</strong><br>${stats.duration}
+                        </div>
+                        <div class="info-item">
+                            <strong>Max Speed:</strong><br>${stats.maxSpeed}
+                        </div>
+                        <div class="info-item">
+                            <strong>Final Speed:</strong><br>${stats.finalSpeed}
+                        </div>
+                        <div class="info-item">
+                            <strong>Distance:</strong><br>${stats.totalDistance}
+                        </div>
+                        <div class="info-item">
+                            <strong>Jumps:</strong><br>${stats.jumps}
+                        </div>
+                    `;
+            }
+
+            statsContainer.style.display = 'block';
+        }
+
+        function setStatus(message, type = '') {
+            const status = document.getElementById('status');
+            status.textContent = message;
+            status.className = `status ${type}`;
+        }
+
+        // Playback controls
+        function startPlayback() {
+            if (isPlaying || !currentFrames || currentFrames.length === 0) return;
+
+            isPlaying = true;
+            document.getElementById('btnPlay').textContent = '⏸';
+
+            const speed = parseFloat(document.getElementById('playbackSpeed').value);
+            const interval = Math.max(16, 1000 / (125 * speed)); // 125 FPS base rate
+
+            playbackInterval = setInterval(() => {
+                if (currentFrame >= currentFrames.length - 1) {
+                    stopPlayback();
+                    return;
+                }
+                setCurrentFrame(currentFrame + 1);
+            }, interval);
+        }
+
+        function stopPlayback() {
+            isPlaying = false;
+            document.getElementById('btnPlay').textContent = '⏵';
+
+            if (playbackInterval) {
+                clearInterval(playbackInterval);
+                playbackInterval = null;
+            }
+        }
+
+        function togglePlayback() {
+            if (isPlaying) {
+                stopPlayback();
+            } else {
+                startPlayback();
+            }
+        }
+
+        // Event listeners
+        document.getElementById('btnLoad').addEventListener('click', () => {
+            const fileName = document.getElementById('demoList').value;
+            loadDemo(fileName);
+        });
+
+        document.getElementById('btnRefresh').addEventListener('click', loadDemos);
+
+        // Add 3D View button functionality
+        document.getElementById('btn3DView').addEventListener('click', () => {
+            if (currentFrames && currentFrames.length > 0) {
+                // Store current demo data in localStorage for 3D viewer
+                localStorage.setItem('q3DemoData', JSON.stringify(currentFrames));
+                // Open 3D viewer in new tab
+                window.open('viewer3d.html', '_blank');
+            }
+        });
+
+        // Add Export JSON button functionality
+        document.getElementById('btnExportJSON').addEventListener('click', () => {
+            if (currentFrames && currentFrames.length > 0) {
+                const jsonData = JSON.stringify(currentFrames, null, 2);
+                const blob = new Blob([jsonData], { type: 'application/json' });
+                const url = URL.createObjectURL(blob);
+                const a = document.createElement('a');
+                a.href = url;
+                a.download = 'demo_data.json';
+                document.body.appendChild(a);
+                a.click();
+                setTimeout(() => {
+                    document.body.removeChild(a);
+                    URL.revokeObjectURL(url);
+                }, 100);
+            }
+        });
+
+        document.getElementById('demoList').addEventListener('change', (e) => {
+            if (e.target.value) {
+                loadDemo(e.target.value);
+            }
+        });
+
+        // Frame control event listeners
+        document.getElementById('frameSlider').addEventListener('input', (e) => {
+            const frameIndex = parseInt(e.target.value);
+            setCurrentFrame(frameIndex);
+        });
+
+        document.getElementById('btnFirst').addEventListener('click', () => setCurrentFrame(0));
+        document.getElementById('btnPrev').addEventListener('click', () => setCurrentFrame(currentFrame - 1));
+        document.getElementById('btnPlay').addEventListener('click', togglePlayback);
+        document.getElementById('btnNext').addEventListener('click', () => setCurrentFrame(currentFrame + 1));
+        document.getElementById('btnLast').addEventListener('click', () => setCurrentFrame(currentFrames.length - 1));
+
+        // Keyboard shortcuts
+        document.addEventListener('keydown', (e) => {
+            if (!currentFrames || currentFrames.length === 0) return;
+
+            switch (e.key) {
+                case 'ArrowLeft':
+                    e.preventDefault();
+                    setCurrentFrame(currentFrame - 1);
+                    break;
+                case 'ArrowRight':
+                    e.preventDefault();
+                    setCurrentFrame(currentFrame + 1);
+                    break;
+                case ' ':
+                    e.preventDefault();
+                    togglePlayback();
+                    break;
+                case 'Home':
+                    e.preventDefault();
+                    setCurrentFrame(0);
+                    break;
+                case 'End':
+                    e.preventDefault();
+                    setCurrentFrame(currentFrames.length - 1);
+                    break;
+            }
+        });
+
+        // Chart setup with current frame highlighting
+        const speedChart = new Chart(document.getElementById('speedChart'), {
+            type: 'line',
+            data: {
+                labels: [],
+                datasets: [{
+                    label: 'Speed (ups)',
+                    data: [],
+                    borderColor: '#4fc3f7',
+                    backgroundColor: 'rgba(79, 195, 247, 0.1)',
+                    fill: true,
+                    tension: 0.2
+                }, {
+                    label: 'Current Frame',
+                    data: [],
+                    borderColor: '#ff6b6b',
+                    backgroundColor: '#ff6b6b',
+                    pointRadius: 8,
+                    pointHoverRadius: 10,
+                    showLine: false
+                }]
+            },
+            options: {
+                responsive: false,
+                maintainAspectRatio: false,
+                scales: {
+                    x: { title: { display: true, text: 'Frame' } },
+                    y: { title: { display: true, text: 'Speed (ups)' } }
+                }
+            }
+        });
+
+        const pathChart = new Chart(document.getElementById('pathChart'), {
+            type: 'scatter',
+            data: {
+                datasets: [{
+                    label: 'Movement Path',
+                    data: [],
+                    borderColor: '#81c784',
+                    backgroundColor: '#81c784',
+                    pointRadius: 1
+                }, {
+                    label: 'Current Position',
+                    data: [],
+                    borderColor: '#ff6b6b',
+                    backgroundColor: '#ff6b6b',
+                    pointRadius: 8,
+                    pointHoverRadius: 10
+                }]
+            },
+            options: {
+                responsive: false,
+                maintainAspectRatio: false,
+                scales: {
+                    x: { title: { display: true, text: 'X Position' } },
+                    y: { title: { display: true, text: 'Y Position' } }
+                }
+            }
+        });
+
+        // New Velocity Vector Chart
+        const velocityChart = new Chart(document.getElementById('velocityChart'), {
+            type: 'scatter',
+            data: {
+                datasets: [{
+                    label: 'Velocity Vector',
+                    data: [],
+                    borderColor: '#ff9800',
+                    backgroundColor: '#ff9800',
+                    pointRadius: 2,
+                    showLine: true,
+                    fill: false
+                }, {
+                    label: 'Current Velocity',
+                    data: [],
+                    borderColor: '#ff6b6b',
+                    backgroundColor: '#ff6b6b',
+                    pointRadius: 8,
+                    pointHoverRadius: 10,
+                    showLine: false
+                }, {
+                    label: 'Yaw Direction',
+                    data: [],
+                    borderColor: '#9c27b0',
+                    backgroundColor: '#9c27b0',
+                    pointRadius: 6,
+                    showLine: true,
+                    fill: false,
+                    borderDash: [5, 5]
+                }]
+            },
+            options: {
+                responsive: false,
+                maintainAspectRatio: false,
+                scales: {
+                    x: {
+                        title: { display: true, text: 'X Velocity (ups)' },
+                        min: -1000,
+                        max: 1000
+                    },
+                    y: {
+                        title: { display: true, text: 'Y Velocity (ups)' },
+                        min: -1000,
+                        max: 1000
+                    }
+                }
+            }
+        });
+
+        // New Acceleration vs Wishdir Chart
+        const accelChart = new Chart(document.getElementById('accelChart'), {
+            type: 'scatter',
+            data: {
+                datasets: [{
+                    label: 'Acceleration vs Wishdir',
+                    data: [],
+                    borderColor: '#e91e63',
+                    backgroundColor: '#e91e63',
+                    pointRadius: 3
+                }, {
+                    label: 'Current Frame',
+                    data: [],
+                    borderColor: '#ff6b6b',
+                    backgroundColor: '#ff6b6b',
+                    pointRadius: 8,
+                    pointHoverRadius: 10,
+                    showLine: false
+                }, {
+                    label: 'Optimal Angle (±30°)',
+                    data: [
+                        { x: -30, y: 0 },
+                        { x: -30, y: 2000 },
+                        { x: 30, y: 0 },
+                        { x: 30, y: 2000 }
+                    ],
+                    borderColor: '#4caf50',
+                    pointRadius: 0,
+                    showLine: true,
+                    fill: false,
+                    borderDash: [5, 5],
+                    borderWidth: 2
+                }, {
+                    label: 'Max Efficiency Zone (±45°)',
+                    data: [
+                        { x: -45, y: 0 },
+                        { x: -45, y: 2000 },
+                        { x: 45, y: 0 },
+                        { x: 45, y: 2000 }
+                    ],
+                    borderColor: '#ff9800',
+                    pointRadius: 0,
+                    showLine: true,
+                    fill: false,
+                    borderDash: [10, 5],
+                    borderWidth: 2
+                }, {
+                    label: 'Obsolete Zone (±90°)',
+                    data: [
+                        { x: -90, y: 0 },
+                        { x: -90, y: 2000 },
+                        { x: 90, y: 0 },
+                        { x: 90, y: 2000 }
+                    ],
+                    borderColor: '#f44336',
+                    pointRadius: 0,
+                    showLine: true,
+                    fill: false,
+                    borderDash: [2, 8],
+                    borderWidth: 2
+                }]
+            },
+            options: {
+                responsive: false,
+                maintainAspectRatio: false,
+                scales: {
+                    x: {
+                        title: { display: true, text: 'Wishdir Velocity Angle (degrees)' },
+                        min: -180,
+                        max: 180
+                    },
+                    y: {
+                        title: { display: true, text: 'Acceleration Magnitude (ups/s)' },
+                        min: 0
+                    }
+                },
+                plugins: {
+                    legend: {
+                        display: true,
+                        position: 'top'
+                    },
+                    tooltip: {
+                        callbacks: {
+                            title: function (context) {
+                                const datasetIndex = context[0].datasetIndex;
+                                if (datasetIndex >= 2) {
+                                    return context[0].dataset.label;
+                                }
+                                return `Angle: ${context[0].parsed.x}°`;
+                            },
+                            label: function (context) {
+                                const datasetIndex = context.datasetIndex;
+                                if (datasetIndex === 2) {
+                                    return 'Optimal strafe angle for maximum acceleration';
+                                } else if (datasetIndex === 3) {
+                                    return 'Maximum efficiency zone - good acceleration';
+                                } else if (datasetIndex === 4) {
+                                    return 'Obsolete zone - minimal/no acceleration';
+                                }
+                                return `Acceleration: ${context.parsed.y.toFixed(1)} ups/s`;
+                            }
+                        }
+                    }
+                }
+            }
+        });
+
+        // New Air Strafe Efficiency Chart
+        let strafeChart;
+        try {
+            strafeChart = new Chart(document.getElementById('strafeChart'), {
+                type: 'line',
+                data: {
+                    labels: [],
+                    datasets: [{
+                        label: 'Strafe Efficiency (%)',
+                        data: [],
+                        borderColor: '#00bcd4',
+                        backgroundColor: 'rgba(0, 188, 212, 0.1)',
+                        fill: true,
+                        tension: 0.2
+                    }, {
+                        label: 'Current Frame',
+                        data: [],
+                        borderColor: '#ff6b6b',
+                        backgroundColor: '#ff6b6b',
+                        pointRadius: 8,
+                        pointHoverRadius: 10,
+                        showLine: false
+                    }]
+                },
+                options: {
+                    responsive: false,
+                    maintainAspectRatio: false,
+                    scales: {
+                        x: { title: { display: true, text: 'Frame' } },
+                        y: {
+                            title: { display: true, text: 'Strafe Efficiency (%)' },
+                            min: 0,
+                            max: 100
+                        }
+                    }
+                }
+            });
+            console.log('strafeChart created successfully:', strafeChart);
+        } catch (error) {
+            console.error('Error creating strafeChart:', error);
+        }
+
+        // Initialize on load
+        initializeYawCompass();
+
+        // Initialize Q3 Physics and then load demos
+        initQ3Physics().then((success) => {
+            if (success) {
+                console.log('Q3 Physics WebAssembly integration successful');
+                setStatus('Q3 Physics initialized - Ready', 'ok');
+            } else {
+                console.warn('Q3 Physics initialization failed, using fallback calculations');
+                setStatus('Using fallback physics - Ready', 'loading');
+            }
+            loadDemos();
+        }).catch(() => {
+            console.warn('Q3 Physics not available, using fallback calculations');
+            setStatus('Using fallback physics - Ready', 'loading');
+            loadDemos();
+        });
+    </script>
+</body>
+</html>

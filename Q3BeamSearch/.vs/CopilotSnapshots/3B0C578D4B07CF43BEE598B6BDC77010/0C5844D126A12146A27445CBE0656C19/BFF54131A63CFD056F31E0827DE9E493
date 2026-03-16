@@ -1,0 +1,826 @@
+﻿<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Q3 Movement Demo Viewer</title>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <style>
+        body { font-family: Arial, sans-serif; margin: 20px; background: #1a1a1a; color: #fff; }
+        .container { max-width: 1600px; margin: 0 auto; }
+        .controls { background: #2a2a2a; padding: 20px; border-radius: 8px; margin-bottom: 20px; }
+        .stats { background: #2a2a2a; padding: 15px; border-radius: 8px; margin-bottom: 20px; }
+        .frame-controls { background: #2a2a2a; padding: 20px; border-radius: 8px; margin-bottom: 20px; }
+        .charts { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 15px; }
+        .chart-container { background: #2a2a2a; padding: 15px; border-radius: 8px; }
+        .frame-info { background: #2a2a2a; padding: 15px; border-radius: 8px; margin-bottom: 20px; }
+        
+        select, button { padding: 8px 12px; margin: 5px; background: #3a3a3a; color: #fff; border: 1px solid #555; border-radius: 4px; }
+        button:hover { background: #4a4a4a; cursor: pointer; }
+        button:disabled { background: #2a2a2a; cursor: not-allowed; opacity: 0.5; }
+        
+        .info { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 10px; }
+        .info-item { background: #3a3a3a; padding: 10px; border-radius: 4px; }
+        .status { padding: 5px 10px; border-radius: 4px; }
+        .ok { background: #2d5a2d; }
+        .error { background: #5a2d2d; }
+        .loading { background: #5a5a2d; }
+        
+        /* Frame slider styles */
+        .slider-container { display: flex; align-items: center; gap: 15px; margin: 15px 0; }
+        .frame-slider { flex: 1; height: 8px; border-radius: 4px; background: #3a3a3a; outline: none; -webkit-appearance: none; }
+        .frame-slider::-webkit-slider-thumb { appearance: none; width: 20px; height: 20px; border-radius: 50%; background: #4fc3f7; cursor: pointer; }
+        .frame-slider::-moz-range-thumb { width: 20px; height: 20px; border-radius: 50%; background: #4fc3f7; cursor: pointer; border: none; }
+        
+        .frame-display { min-width: 120px; text-align: center; font-weight: bold; color: #4fc3f7; }
+        .playback-controls { display: flex; gap: 10px; align-items: center; }
+        .playback-speed { width: 80px; }
+        
+        /* Frame info grid */
+        .frame-details { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 10px; }
+        .frame-detail { background: #3a3a3a; padding: 8px; border-radius: 4px; text-align: center; }
+        .frame-detail .label { font-size: 0.9em; color: #bbb; }
+        .frame-detail .value { font-size: 1.1em; font-weight: bold; color: #fff; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>Q3 Movement Demo Viewer</h1>
+        
+        <div class="controls">
+            <h3>Demo Selection</h3>
+            <select id="demoList">
+                <option value="">Select a demo...</option>
+            </select>
+            <button id="btnLoad">Load Demo</button>
+            <button id="btnRefresh">Refresh List</button>
+            <span id="status" class="status">Ready</span>
+        </div>
+
+        <div id="frameControls" class="frame-controls" style="display: none;">
+            <h3>Frame-by-Frame Analysis</h3>
+            
+            <div class="slider-container">
+                <span>Frame:</span>
+                <input type="range" id="frameSlider" class="frame-slider" min="0" max="100" value="0" step="1">
+                <div id="frameDisplay" class="frame-display">0 / 0</div>
+            </div>
+            
+            <div class="playback-controls">
+                <button id="btnFirst" title="First Frame">⏮</button>
+                <button id="btnPrev" title="Previous Frame">⏴</button>
+                <button id="btnPlay" title="Play/Pause">⏵</button>
+                <button id="btnNext" title="Next Frame">⏵</button>
+                <button id="btnLast" title="Last Frame">⏭</button>
+                <span>Speed:</span>
+                <select id="playbackSpeed" class="playback-speed">
+                    <option value="0.25">0.25x</option>
+                    <option value="0.5">0.5x</option>
+                    <option value="1" selected>1x</option>
+                    <option value="2">2x</option>
+                    <option value="4">4x</option>
+                    <option value="8">8x</option>
+                </select>
+            </div>
+        </div>
+
+        <div id="frameInfo" class="frame-info" style="display: none;">
+            <h3>Current Frame Details</h3>
+            <div id="frameDetails" class="frame-details"></div>
+        </div>
+
+        <div id="statsContainer" class="stats" style="display: none;">
+            <h3>Demo Statistics</h3>
+            <div id="statsContent" class="info"></div>
+        </div>
+
+        <div class="charts">
+            <div class="chart-container">
+                <h3>Speed Over Time</h3>
+                <canvas id="speedChart" width="500" height="250"></canvas>
+            </div>
+            <div class="chart-container">
+                <h3>Movement Path (2D)</h3>
+                <canvas id="pathChart" width="500" height="250"></canvas>
+            </div>
+            <div class="chart-container">
+                <h3>Yaw Angle Over Time</h3>
+                <canvas id="yawChart" width="500" height="250"></canvas>
+            </div>
+            <div class="chart-container">
+                <h3>Velocity Vector Visualization</h3>
+                <canvas id="velocityChart" width="500" height="250"></canvas>
+            </div>
+            <div class="chart-container">
+                <h3>Acceleration vs Wishdir Angle</h3>
+                <canvas id="accelChart" width="500" height="250"></canvas>
+            </div>
+            <div class="chart-container">
+                <h3>Air Strafe Efficiency</h3>
+                <canvas id="strafeChart" width="500" height="250"></canvas>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        let currentFrames = [];
+        let currentFrame = 0;
+        let isPlaying = false;
+        let playbackInterval = null;
+
+        // Chart setup with current frame highlighting
+        const speedChart = new Chart(document.getElementById('speedChart'), {
+            type: 'line',
+            data: {
+                labels: [],
+                datasets: [{
+                    label: 'Speed (ups)',
+                    data: [],
+                    borderColor: '#4fc3f7',
+                    backgroundColor: 'rgba(79, 195, 247, 0.1)',
+                    fill: true,
+                    tension: 0.2
+                }, {
+                    label: 'Current Frame',
+                    data: [],
+                    borderColor: '#ff6b6b',
+                    backgroundColor: '#ff6b6b',
+                    pointRadius: 8,
+                    pointHoverRadius: 10,
+                    showLine: false
+                }]
+            },
+            options: {
+                responsive: false,
+                maintainAspectRatio: false,
+                scales: {
+                    x: { title: { display: true, text: 'Frame' } },
+                    y: { title: { display: true, text: 'Speed (ups)' } }
+                }
+            }
+        });
+
+        const pathChart = new Chart(document.getElementById('pathChart'), {
+            type: 'scatter',
+            data: {
+                datasets: [{
+                    label: 'Movement Path',
+                    data: [],
+                    borderColor: '#81c784',
+                    backgroundColor: '#81c784',
+                    pointRadius: 1
+                }, {
+                    label: 'Current Position',
+                    data: [],
+                    borderColor: '#ff6b6b',
+                    backgroundColor: '#ff6b6b',
+                    pointRadius: 8,
+                    pointHoverRadius: 10
+                }]
+            },
+            options: {
+                responsive: false,
+                maintainAspectRatio: false,
+                scales: {
+                    x: { title: { display: true, text: 'X Position' } },
+                    y: { title: { display: true, text: 'Y Position' } }
+                }
+            }
+        });
+
+        // New Yaw Chart
+        const yawChart = new Chart(document.getElementById('yawChart'), {
+            type: 'line',
+            data: {
+                labels: [],
+                datasets: [{
+                    label: 'Yaw Angle (°)',
+                    data: [],
+                    borderColor: '#9c27b0',
+                    backgroundColor: 'rgba(156, 39, 176, 0.1)',
+                    fill: true,
+                    tension: 0.2
+                }, {
+                    label: 'Current Frame',
+                    data: [],
+                    borderColor: '#ff6b6b',
+                    backgroundColor: '#ff6b6b',
+                    pointRadius: 8,
+                    pointHoverRadius: 10,
+                    showLine: false
+                }]
+            },
+            options: {
+                responsive: false,
+                maintainAspectRatio: false,
+                scales: {
+                    x: { title: { display: true, text: 'Frame' } },
+                    y: { 
+                        title: { display: true, text: 'Yaw Angle (degrees)' },
+                        min: 0,
+                        max: 360
+                    }
+                }
+            }
+        });
+
+        // New Velocity Vector Chart
+        const velocityChart = new Chart(document.getElementById('velocityChart'), {
+            type: 'scatter',
+            data: {
+                datasets: [{
+                    label: 'Velocity Vector',
+                    data: [],
+                    borderColor: '#ff9800',
+                    backgroundColor: '#ff9800',
+                    pointRadius: 2,
+                    showLine: true,
+                    fill: false
+                }, {
+                    label: 'Current Velocity',
+                    data: [],
+                    borderColor: '#ff6b6b',
+                    backgroundColor: '#ff6b6b',
+                    pointRadius: 8,
+                    pointHoverRadius: 10,
+                    showLine: false
+                }, {
+                    label: 'Yaw Direction',
+                    data: [],
+                    borderColor: '#9c27b0',
+                    backgroundColor: '#9c27b0',
+                    pointRadius: 6,
+                    showLine: true,
+                    fill: false,
+                    borderDash: [5, 5]
+                }]
+            },
+            options: {
+                responsive: false,
+                maintainAspectRatio: false,
+                scales: {
+                    x: { 
+                        title: { display: true, text: 'X Velocity (ups)' },
+                        min: -1000,
+                        max: 1000
+                    },
+                    y: { 
+                        title: { display: true, text: 'Y Velocity (ups)' },
+                        min: -1000,
+                        max: 1000
+                    }
+                }
+            }
+        });
+
+        // New Acceleration vs Wishdir Chart
+        const accelChart = new Chart(document.getElementById('accelChart'), {
+            type: 'scatter',
+            data: {
+                datasets: [{
+                    label: 'Acceleration vs Wishdir',
+                    data: [],
+                    borderColor: '#e91e63',
+                    backgroundColor: '#e91e63',
+                    pointRadius: 3
+                }, {
+                    label: 'Current Frame',
+                    data: [],
+                    borderColor: '#ff6b6b',
+                    backgroundColor: '#ff6b6b',
+                    pointRadius: 8,
+                    pointHoverRadius: 10,
+                    showLine: false
+                }]
+            },
+            options: {
+                responsive: false,
+                maintainAspectRatio: false,
+                scales: {
+                    x: { 
+                        title: { display: true, text: 'Wishdir Velocity Angle (degrees)' },
+                        min: -180,
+                        max: 180
+                    },
+                    y: { 
+                        title: { display: true, text: 'Acceleration Magnitude (ups/s)' },
+                        min: 0
+                    }
+                }
+            }
+        });
+
+        // New Air Strafe Efficiency Chart  
+        const strafeChart = new Chart(document.getElementById('strafeChart'), {
+            type: 'line',
+            data: {
+                labels: [],
+                datasets: [{
+                    label: 'Strafe Efficiency (%)',
+                    data: [],
+                    borderColor: '#00bcd4',
+                    backgroundColor: 'rgba(0, 188, 212, 0.1)',
+                    fill: true,
+                    tension: 0.2
+                }, {
+                    label: 'Current Frame',
+                    data: [],
+                    borderColor: '#ff6b6b',
+                    backgroundColor: '#ff6b6b',
+                    pointRadius: 8,
+                    pointHoverRadius: 10,
+                    showLine: false
+                }]
+            },
+            options: {
+                responsive: false,
+                maintainAspectRatio: false,
+                scales: {
+                    x: { title: { display: true, text: 'Frame' } },
+                    y: { 
+                        title: { display: true, text: 'Strafe Efficiency (%)' },
+                        min: 0,
+                        max: 100
+                    }
+                }
+            }
+        });
+
+        // Demo management
+        async function loadDemos() {
+            try {
+                setStatus('Loading demos...', 'loading');
+                const response = await fetch('/demos');
+                const demos = await response.json();
+                
+                const select = document.getElementById('demoList');
+                select.innerHTML = '<option value="">Select a demo...</option>';
+                
+                demos.forEach(demo => {
+                    const option = document.createElement('option');
+                    option.value = demo;
+                    option.textContent = demo;
+                    select.appendChild(option);
+                });
+                
+                setStatus(`Found ${demos.length} demos`, 'ok');
+            } catch (error) {
+                setStatus('Error loading demos', 'error');
+                console.error('Error loading demos:', error);
+            }
+        }
+
+        async function loadDemo(fileName) {
+            if (!fileName) return;
+            
+            try {
+                setStatus('Loading demo data...', 'loading');
+                stopPlayback();
+                
+                // Load demo frames
+                const response = await fetch(`/demo/${encodeURIComponent(fileName)}`);
+                if (!response.ok) {
+                    throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+                }
+                
+                currentFrames = await response.json();
+                
+                // Load demo stats
+                const statsResponse = await fetch(`/demo/${encodeURIComponent(fileName)}/stats`);
+                const stats = await statsResponse.json();
+                
+                // Update charts
+                updateCharts(currentFrames);
+                
+                // Update stats display
+                updateStats(stats);
+                
+                // Setup frame controls
+                setupFrameControls();
+                
+                // Go to first frame
+                setCurrentFrame(0);
+                
+                setStatus(`Loaded ${currentFrames.length} frames`, 'ok');
+                
+            } catch (error) {
+                setStatus('Error loading demo', 'error');
+                console.error('Error loading demo:', error);
+            }
+        }
+
+        function setupFrameControls() {
+            if (currentFrames.length === 0) return;
+            
+            const slider = document.getElementById('frameSlider');
+            slider.max = currentFrames.length - 1;
+            slider.value = 0;
+            
+            document.getElementById('frameControls').style.display = 'block';
+            document.getElementById('frameInfo').style.display = 'block';
+        }
+
+        function setCurrentFrame(frameIndex) {
+            if (!currentFrames || currentFrames.length === 0) return;
+            
+            frameIndex = Math.max(0, Math.min(frameIndex, currentFrames.length - 1));
+            currentFrame = frameIndex;
+            
+            const frame = currentFrames[frameIndex];
+            
+            // Update slider
+            document.getElementById('frameSlider').value = frameIndex;
+            
+            // Update display
+            document.getElementById('frameDisplay').textContent = `${frameIndex} / ${currentFrames.length - 1}`;
+            
+            // Update frame details
+            updateFrameDetails(frame);
+            
+            // Update chart highlighting
+            updateChartHighlight(frameIndex, frame);
+        }
+
+        function calculateAcceleration(frameIndex) {
+            if (frameIndex < 1 || frameIndex >= currentFrames.length) return { magnitude: 0, wishAngle: 0, efficiency: 0 };
+            
+            const prevFrame = currentFrames[frameIndex - 1];
+            const currFrame = currentFrames[frameIndex];
+            const dt = 1.0 / 125.0; // 125 FPS
+            
+            // Calculate velocity change (acceleration)
+            const velPrevX = frameIndex < 2 ? 0 : (prevFrame.x - currentFrames[frameIndex - 2].x) / dt;
+            const velPrevY = frameIndex < 2 ? 0 : (prevFrame.y - currentFrames[frameIndex - 2].y) / dt;
+            const velCurrX = (currFrame.x - prevFrame.x) / dt;
+            const velCurrY = (currFrame.y - prevFrame.y) / dt;
+            
+            const accelX = velCurrX - velPrevX;
+            const accelY = velCurrY - velPrevY;
+            const accelMagnitude = Math.sqrt(accelX * accelX + accelY * accelY);
+            
+            // Calculate wishdir relative to velocity
+            const velAngle = Math.atan2(velPrevY, velPrevX) * 180 / Math.PI;
+            const yawAngle = prevFrame.yawDeg;
+            
+            // Assume forward+strafe movement (45 degree offset from yaw)
+            const wishAngle = yawAngle + 45; // Simplified assumption
+            const wishVelAngleDiff = ((wishAngle - velAngle + 180) % 360) - 180;
+            
+            // Calculate strafe efficiency (how close to optimal angle)
+            // Optimal angle for air strafing is typically around 30-45 degrees
+            const optimalAngle = 30; // degrees
+            const efficiency = Math.max(0, 100 - Math.abs(Math.abs(wishVelAngleDiff) - optimalAngle) * 2);
+            
+            return {
+                magnitude: accelMagnitude,
+                wishAngle: wishVelAngleDiff,
+                efficiency: efficiency
+            };
+        }
+
+        function updateFrameDetails(frame) {
+            const container = document.getElementById('frameDetails');
+            
+            // Calculate velocity components from frame data
+            let velX = 0, velY = 0;
+            if (currentFrame > 0) {
+                const prevFrame = currentFrames[currentFrame - 1];
+                const dt = 1.0 / 125.0; // 125 FPS
+                velX = (frame.x - prevFrame.x) / dt;
+                velY = (frame.y - prevFrame.y) / dt;
+            }
+            
+            const velMagnitude = Math.sqrt(velX * velX + velY * velY);
+            const velAngle = Math.atan2(velY, velX) * 180 / Math.PI;
+            
+            // Calculate acceleration data
+            const accelData = calculateAcceleration(currentFrame);
+            
+            container.innerHTML = `
+                <div class="frame-detail">
+                    <div class="label">Frame</div>
+                    <div class="value">${frame.frame}</div>
+                </div>
+                <div class="frame-detail">
+                    <div class="label">Speed</div>
+                    <div class="value">${frame.speed.toFixed(1)} ups</div>
+                </div>
+                <div class="frame-detail">
+                    <div class="label">Position X</div>
+                    <div class="value">${frame.x.toFixed(1)}</div>
+                </div>
+                <div class="frame-detail">
+                    <div class="label">Position Y</div>
+                    <div class="value">${frame.y.toFixed(1)}</div>
+                </div>
+                <div class="frame-detail">
+                    <div class="label">Position Z</div>
+                    <div class="value">${frame.z.toFixed(1)}</div>
+                </div>
+                <div class="frame-detail">
+                    <div class="label">Ground</div>
+                    <div class="value">${frame.onGround ? 'Yes' : 'No'}</div>
+                </div>
+                <div class="frame-detail">
+                    <div class="label">Yaw</div>
+                    <div class="value">${frame.yawDeg.toFixed(1)}°</div>
+                </div>
+                <div class="frame-detail">
+                    <div class="label">Time</div>
+                    <div class="value">${(frame.frame / 125.0).toFixed(2)}s</div>
+                </div>
+                <div class="frame-detail">
+                    <div class="label">Vel X</div>
+                    <div class="value">${velX.toFixed(1)} ups</div>
+                </div>
+                <div class="frame-detail">
+                    <div class="label">Vel Y</div>
+                    <div class="value">${velY.toFixed(1)} ups</div>
+                </div>
+                <div class="frame-detail">
+                    <div class="label">Vel Angle</div>
+                    <div class="value">${velAngle.toFixed(1)}°</div>
+                </div>
+                <div class="frame-detail">
+                    <div class="label">Vel Mag</div>
+                    <div class="value">${velMagnitude.toFixed(1)} ups</div>
+                </div>
+                <div class="frame-detail">
+                    <div class="label">Accel Mag</div>
+                    <div class="value">${accelData.magnitude.toFixed(1)} ups/s</div>
+                </div>
+                <div class="frame-detail">
+                    <div class="label">Wish Angle</div>
+                    <div class="value">${accelData.wishAngle.toFixed(1)}°</div>
+                </div>
+                <div class="frame-detail">
+                    <div class="label">Strafe Eff</div>
+                    <div class="value">${accelData.efficiency.toFixed(1)}%</div>
+                </div>
+            `;
+        }
+
+        function updateChartHighlight(frameIndex, frame) {
+            // Calculate velocity for current frame
+            let velX = 0, velY = 0;
+            if (frameIndex > 0) {
+                const prevFrame = currentFrames[frameIndex - 1];
+                const dt = 1.0 / 125.0;
+                velX = (frame.x - prevFrame.x) / dt;
+                velY = (frame.y - prevFrame.y) / dt;
+            }
+            
+            // Calculate yaw direction vector (unit length for visualization)
+            const yawRad = frame.yawDeg * Math.PI / 180;
+            const yawX = Math.cos(yawRad) * 500; // Scale for visibility
+            const yawY = Math.sin(yawRad) * 500;
+            
+            // Calculate acceleration data
+            const accelData = calculateAcceleration(frameIndex);
+            
+            // Update speed chart highlight
+            speedChart.data.datasets[1].data = [{
+                x: frameIndex,
+                y: frame.speed
+            }];
+            
+            // Update path chart highlight
+            pathChart.data.datasets[1].data = [{
+                x: frame.x,
+                y: frame.y
+            }];
+            
+            // Update yaw chart highlight
+            yawChart.data.datasets[1].data = [{
+                x: frameIndex,
+                y: frame.yawDeg
+            }];
+            
+            // Update velocity chart highlight
+            velocityChart.data.datasets[1].data = [{
+                x: velX,
+                y: velY
+            }];
+            
+            // Update yaw direction vector (from origin to show direction)
+            velocityChart.data.datasets[2].data = [
+                { x: 0, y: 0 },
+                { x: yawX, y: yawY }
+            ];
+            
+            // Update acceleration chart highlight
+            accelChart.data.datasets[1].data = [{
+                x: accelData.wishAngle,
+                y: accelData.magnitude
+            }];
+            
+            // Update strafe chart highlight
+            strafeChart.data.datasets[1].data = [{
+                x: frameIndex,
+                y: accelData.efficiency
+            }];
+            
+            speedChart.update('none');
+            pathChart.update('none');
+            yawChart.update('none');
+            velocityChart.update('none');
+            accelChart.update('none');
+            strafeChart.update('none');
+        }
+
+        function updateCharts(frames) {
+            // Clear existing data
+            speedChart.data.labels = [];
+            speedChart.data.datasets[0].data = [];
+            speedChart.data.datasets[1].data = [];
+            pathChart.data.datasets[0].data = [];
+            pathChart.data.datasets[1].data = [];
+            yawChart.data.labels = [];
+            yawChart.data.datasets[0].data = [];
+            yawChart.data.datasets[1].data = [];
+            velocityChart.data.datasets[0].data = [];
+            velocityChart.data.datasets[1].data = [];
+            velocityChart.data.datasets[2].data = [];
+            accelChart.data.datasets[0].data = [];
+            accelChart.data.datasets[1].data = [];
+            strafeChart.data.labels = [];
+            strafeChart.data.datasets[0].data = [];
+            strafeChart.data.datasets[1].data = [];
+
+            // Add new data
+            frames.forEach((frame, index) => {
+                // Speed and path data
+                speedChart.data.labels.push(index);
+                speedChart.data.datasets[0].data.push(frame.speed);
+                pathChart.data.datasets[0].data.push({ x: frame.x, y: frame.y });
+                
+                // Yaw data
+                yawChart.data.labels.push(index);
+                yawChart.data.datasets[0].data.push(frame.yawDeg);
+                
+                // Velocity data (calculated from position changes)
+                if (index > 0) {
+                    const prevFrame = frames[index - 1];
+                    const dt = 1.0 / 125.0; // 125 FPS
+                    const velX = (frame.x - prevFrame.x) / dt;
+                    const velY = (frame.y - prevFrame.y) / dt;
+                    
+                    velocityChart.data.datasets[0].data.push({ x: velX, y: velY });
+                }
+                
+                // Acceleration and strafe efficiency data
+                const accelData = calculateAcceleration(index);
+                if (index > 0) {
+                    accelChart.data.datasets[0].data.push({ 
+                        x: accelData.wishAngle, 
+                        y: accelData.magnitude 
+                    });
+                }
+                
+                strafeChart.data.labels.push(index);
+                strafeChart.data.datasets[0].data.push(accelData.efficiency);
+            });
+
+            // Update charts
+            speedChart.update();
+            pathChart.update();
+            yawChart.update();
+            velocityChart.update();
+            accelChart.update();
+            strafeChart.update();
+        }
+
+        function updateStats(stats) {
+            const container = document.getElementById('statsContent');
+            const statsContainer = document.getElementById('statsContainer');
+            
+            if (stats.error) {
+                container.innerHTML = `<div class="info-item">Error: ${stats.error}</div>`;
+            } else {
+                container.innerHTML = `
+                    <div class="info-item">
+                        <strong>Total Frames:</strong><br>${stats.totalFrames}
+                    </div>
+                    <div class="info-item">
+                        <strong>Duration:</strong><br>${stats.duration}
+                    </div>
+                    <div class="info-item">
+                        <strong>Max Speed:</strong><br>${stats.maxSpeed}
+                    </div>
+                    <div class="info-item">
+                        <strong>Final Speed:</strong><br>${stats.finalSpeed}
+                    </div>
+                    <div class="info-item">
+                        <strong>Distance:</strong><br>${stats.totalDistance}
+                    </div>
+                    <div class="info-item">
+                        <strong>Jumps:</strong><br>${stats.jumps}
+                    </div>
+                `;
+            }
+            
+            statsContainer.style.display = 'block';
+        }
+
+        function setStatus(message, type = '') {
+            const status = document.getElementById('status');
+            status.textContent = message;
+            status.className = `status ${type}`;
+        }
+
+        // Playback controls
+        function startPlayback() {
+            if (isPlaying || !currentFrames || currentFrames.length === 0) return;
+            
+            isPlaying = true;
+            document.getElementById('btnPlay').textContent = '⏸';
+            
+            const speed = parseFloat(document.getElementById('playbackSpeed').value);
+            const interval = Math.max(16, 1000 / (125 * speed)); // 125 FPS base rate
+            
+            playbackInterval = setInterval(() => {
+                if (currentFrame >= currentFrames.length - 1) {
+                    stopPlayback();
+                    return;
+                }
+                setCurrentFrame(currentFrame + 1);
+            }, interval);
+        }
+
+        function stopPlayback() {
+            isPlaying = false;
+            document.getElementById('btnPlay').textContent = '⏵';
+            
+            if (playbackInterval) {
+                clearInterval(playbackInterval);
+                playbackInterval = null;
+            }
+        }
+
+        function togglePlayback() {
+            if (isPlaying) {
+                stopPlayback();
+            } else {
+                startPlayback();
+            }
+        }
+
+        // Event listeners
+        document.getElementById('btnLoad').addEventListener('click', () => {
+            const fileName = document.getElementById('demoList').value;
+            loadDemo(fileName);
+        });
+
+        document.getElementById('btnRefresh').addEventListener('click', loadDemos);
+
+        document.getElementById('demoList').addEventListener('change', (e) => {
+            if (e.target.value) {
+                loadDemo(e.target.value);
+            }
+        });
+
+        // Frame control event listeners
+        document.getElementById('frameSlider').addEventListener('input', (e) => {
+            const frameIndex = parseInt(e.target.value);
+            setCurrentFrame(frameIndex);
+        });
+
+        document.getElementById('btnFirst').addEventListener('click', () => setCurrentFrame(0));
+        document.getElementById('btnPrev').addEventListener('click', () => setCurrentFrame(currentFrame - 1));
+        document.getElementById('btnPlay').addEventListener('click', togglePlayback);
+        document.getElementById('btnNext').addEventListener('click', () => setCurrentFrame(currentFrame + 1));
+        document.getElementById('btnLast').addEventListener('click', () => setCurrentFrame(currentFrames.length - 1));
+
+        // Keyboard shortcuts
+        document.addEventListener('keydown', (e) => {
+            if (!currentFrames || currentFrames.length === 0) return;
+            
+            switch(e.key) {
+                case 'ArrowLeft':
+                    e.preventDefault();
+                    setCurrentFrame(currentFrame - 1);
+                    break;
+                case 'ArrowRight':
+                    e.preventDefault();
+                    setCurrentFrame(currentFrame + 1);
+                    break;
+                case ' ':
+                    e.preventDefault();
+                    togglePlayback();
+                    break;
+                case 'Home':
+                    e.preventDefault();
+                    setCurrentFrame(0);
+                    break;
+                case 'End':
+                    e.preventDefault();
+                    setCurrentFrame(currentFrames.length - 1);
+                    break;
+            }
+        });
+
+        // Load demos on page load
+        loadDemos();
+    </script>
+</body>
+</html>

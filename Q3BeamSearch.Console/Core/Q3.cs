@@ -1,0 +1,21 @@
+using System;
+
+namespace Q3BeamSearch
+{
+    // ---------------------- Constants (Defrag VQ3-like defaults) ----------------------
+    public static class Q3
+    {
+        public const double PM_STOPSPEED = 100.0;
+        public const double PM_ACCELERATE = 10.0;
+        public const double PM_AIRACCELERATE = 1.0;
+        public const double PM_FRICTION = 6.0;
+        public const double SV_GRAVITY = 800.0;     // g_gravity
+        public const double SV_MAXSPEED = 320.0;    // ps->speed
+        public const double JUMP_VELOCITY = 270.0;  // upward impulse
+        public const double AIR_WISHSPEED_CAP = 30.0; // Q3 AirAccelerate cap
+
+        public const int FPS = 125;
+        public const double DT = 1.0 / FPS;
+        public const double DEG = Math.PI / 180.0;
+    }
+}

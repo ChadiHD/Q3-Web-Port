@@ -1,0 +1,137 @@
+﻿<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <title>Q3 Movement Live Plot</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <style>
+    body { font-family: system-ui, Segoe UI, Arial, sans-serif; margin: 0; padding: 16px; background:#121212; color:#eee; }
+    .row { display: flex; gap: 16px; flex-wrap: wrap; }
+    .chart { background:#1e1e1e; padding:12px; border-radius:8px; flex:1 1 480px; }
+    canvas { width:100%; height:360px; }
+    .pill { display:inline-block; padding:4px 8px; border-radius:12px; background:#2a2a2a; margin-right:8px; }
+    .ok { color:#90ee90; } .warn { color:#ffa500; }
+  </style>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1"></script>
+  <script src="https://cdn.jsdelivr.net/npm/@microsoft/signalr@8.0.5/dist/browser/signalr.min.js"></script>
+</head>
+<body>
+  <h2>Q3 Movement – Live Simulation</h2>
+  <div>
+    <span id="status" class="pill warn">Connecting…</span>
+    <span id="frame" class="pill">Frame: 0</span>
+    <span id="speed" class="pill">Speed: 0</span>
+    <span id="ground" class="pill">Ground: ?</span>
+  </div>
+  <div class="row">
+    <div class="chart">
+      <h3>Speed (ups) vs Time</h3>
+      <canvas id="speedChart"></canvas>
+    </div>
+    <div class="chart">
+      <h3>Path (X vs Y)</h3>
+      <canvas id="pathChart"></canvas>
+    </div>
+  </div>
+
+  <script>
+    const maxPoints = 1500; // window size
+
+    // Speed chart (line)
+    const speedCtx = document.getElementById('speedChart');
+    const speedChart = new Chart(speedCtx, {
+      type: 'line',
+      data: {
+        labels: [],
+        datasets: [{
+          label: 'Speed (ups)',
+          data: [],
+          borderColor: '#4bc0c0',
+          backgroundColor: 'rgba(75,192,192,0.15)',
+          pointRadius: 0,
+          borderWidth: 2,
+          cubicInterpolationMode: 'monotone',
+          tension: 0.2
+        }]
+      },
+      options: {
+        animation: false,
+        responsive: true,
+        scales: {
+          x: { ticks: { color: '#aaa' }, grid: { color: '#333' } },
+          y: { beginAtZero: true, ticks: { color: '#aaa' }, grid: { color: '#333' } }
+        },
+        plugins: { legend: { labels: { color: '#ddd' } } }
+      }
+    });
+
+    // Path chart (scatter with line)
+    const pathCtx = document.getElementById('pathChart');
+    const pathChart = new Chart(pathCtx, {
+      type: 'scatter',
+      data: {
+        datasets: [{
+          label: 'XY Path',
+          data: [],
+          showLine: true,
+          borderColor: '#ffa500',
+          backgroundColor: 'rgba(255,165,0,0.2)',
+          pointRadius: 0,
+          borderWidth: 2
+        }]
+      },
+      options: {
+        animation: false,
+        responsive: true,
+        scales: {
+          x: { title: { display: true, text: 'X (units)', color: '#ddd' }, ticks: { color: '#aaa' }, grid: { color: '#333' } },
+          y: { title: { display: true, text: 'Y (units)', color: '#ddd' }, ticks: { color: '#aaa' }, grid: { color: '#333' } }
+        },
+        plugins: { legend: { labels: { color: '#ddd' } } }
+      }
+    });
+
+    function appendPoint(frame, speed, x, y) {
+      // Speed chart
+      speedChart.data.labels.push(frame);
+      speedChart.data.datasets[0].data.push(speed);
+      if (speedChart.data.labels.length > maxPoints) {
+        speedChart.data.labels.shift();
+        speedChart.data.datasets[0].data.shift();
+      }
+      speedChart.update('none');
+
+      // Path chart
+      pathChart.data.datasets[0].data.push({ x, y });
+      if (pathChart.data.datasets[0].data.length > maxPoints) {
+        pathChart.data.datasets[0].data.shift();
+      }
+      pathChart.update('none');
+    }
+
+    // SignalR connection
+    const connection = new signalR.HubConnectionBuilder()
+      .withUrl('/sim')
+      .withAutomaticReconnect()
+      .build();
+
+    connection.on('frame', dto => {
+      document.getElementById('frame').textContent = `Frame: ${dto.frame}`;
+      document.getElementById('speed').textContent = `Speed: ${dto.speed.toFixed(1)} ups`;
+      document.getElementById('ground').textContent = `Ground: ${dto.onGround ? 'Yes' : 'No'}`;
+      appendPoint(dto.frame, dto.speed, dto.x, dto.y);
+    });
+
+    connection.start()
+      .then(() => {
+        document.getElementById('status').textContent = 'Connected';
+        document.getElementById('status').classList.remove('warn');
+        document.getElementById('status').classList.add('ok');
+      })
+      .catch(err => {
+        document.getElementById('status').textContent = 'Error';
+        console.error(err);
+      });
+  </script>
+</body>
+</html>

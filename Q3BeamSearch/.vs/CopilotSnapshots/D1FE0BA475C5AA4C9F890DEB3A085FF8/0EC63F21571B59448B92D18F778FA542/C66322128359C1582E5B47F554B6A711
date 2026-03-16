@@ -1,0 +1,169 @@
+﻿// Stubs for functions oDFe expects but we don't need in browser
+
+#include <stdio.h>
+#include <stdarg.h>
+#include <string.h>
+#include <math.h>
+#include "q_shared.h"
+#include "bg_public.h"
+
+// ============================================================
+// Engine trap functions (not provided by any bg_*.c file)
+// ============================================================
+
+// Snap vector components to integers (used at end of PmoveSingle)
+void trap_SnapVector(float *v) {
+    v[0] = (int)v[0];
+    v[1] = (int)v[1];
+    v[2] = (int)v[2];
+}
+
+// Error handling
+void trap_Error(const char *fmt, ...) {
+    va_list ap;
+    va_start(ap, fmt);
+    vprintf(fmt, ap);
+    va_end(ap);
+    printf("\n");
+}
+
+// Print function
+void trap_Print(const char *msg) {
+    printf("%s", msg);
+}
+
+// Trace function (collision detection - simplified: no world collision)
+void trap_Trace(trace_t *results, const vec3_t start, const vec3_t mins,
+                const vec3_t maxs, const vec3_t end, int passEntityNum, int contentmask) {
+    memset(results, 0, sizeof(*results));
+    VectorCopy(end, results->endpos);
+    results->fraction = 1.0f;
+    results->allsolid = qfalse;
+    results->startsolid = qfalse;
+    results->entityNum = ENTITYNUM_NONE;
+}
+
+// Point contents (what's at this point - simplified: always air)
+int trap_PointContents(const vec3_t point, int passEntityNum) {
+    return 0;
+}
+
+// Cvar read - stub (used by BG_AddPredictableEventToPlayerstate in _DEBUG only)
+void trap_Cvar_VariableStringBuffer(const char *var_name, char *buffer, int bufsize) {
+    if (bufsize > 0) buffer[0] = '\0';
+}
+
+// ============================================================
+// Com_Printf / Com_Error (called by bg_pmove.c debug prints
+// and bg_misc.c error handling)
+// ============================================================
+
+void QDECL Com_Printf(const char *msg, ...) {
+    va_list ap;
+    va_start(ap, msg);
+    vprintf(msg, ap);
+    va_end(ap);
+}
+
+void QDECL Com_Error(int level, const char *error, ...) {
+    va_list ap;
+    va_start(ap, error);
+    printf("ERROR [%d]: ", level);
+    vprintf(error, ap);
+    va_end(ap);
+    printf("\n");
+}
+
+// ============================================================
+// Utility functions referenced by bg code
+// ============================================================
+
+// pmove counter used by debug prints in PmoveSingle
+int c_pmove = 0;
+
+// Com_Memset / Com_Memcpy (sometimes referenced instead of standard)
+#if !defined(__VECTORC)
+void Com_Memset(void *dest, const int val, const size_t count) {
+    memset(dest, val, count);
+}
+
+void Com_Memcpy(void *dest, const void *src, const size_t count) {
+    memcpy(dest, src, count);
+}
+#endif
+
+// Com_sprintf
+void QDECL Com_sprintf(char *dest, int size, const char *fmt, ...) {
+    va_list ap;
+    va_start(ap, fmt);
+    vsnprintf(dest, size, fmt, ap);
+    va_end(ap);
+}
+
+// va() - variable argument string formatting
+char *QDECL va(char *format, ...) {
+    static char string[2][32000];
+    static int index = 0;
+    char *buf;
+    va_list ap;
+
+    buf = string[index & 1];
+    index++;
+
+    va_start(ap, format);
+    vsnprintf(buf, sizeof(string[0]), format, ap);
+    va_end(ap);
+
+    return buf;
+}
+
+// Q_stricmp - case-insensitive string compare (used by BG_FindItem in bg_misc.c)
+int Q_stricmp(const char *s1, const char *s2) {
+    unsigned char c1, c2;
+    if (s1 == NULL) return s2 == NULL ? 0 : -1;
+    if (s2 == NULL) return 1;
+    do {
+        c1 = *s1++;
+        c2 = *s2++;
+        if (c1 >= 'A' && c1 <= 'Z') c1 += 'a' - 'A';
+        if (c2 >= 'A' && c2 <= 'Z') c2 += 'a' - 'A';
+        if (c1 != c2) return c1 < c2 ? -1 : 1;
+    } while (c1);
+    return 0;
+}
+
+// vectoangles - convert direction vector to angles (used by BG_TouchJumpPad)
+void vectoangles(const vec3_t value1, vec3_t angles) {
+    float forward;
+    float yaw, pitch;
+
+    if (value1[1] == 0 && value1[0] == 0) {
+        yaw = 0;
+        pitch = value1[2] > 0 ? 90 : 270;
+    } else {
+        if (value1[0]) {
+            yaw = (atan2(value1[1], value1[0]) * 180 / M_PI);
+        } else if (value1[1] > 0) {
+            yaw = 90;
+        } else {
+            yaw = 270;
+        }
+        if (yaw < 0) yaw += 360;
+
+        forward = sqrt(value1[0] * value1[0] + value1[1] * value1[1]);
+        pitch = (atan2(value1[2], forward) * 180 / M_PI);
+        if (pitch < 0) pitch += 360;
+    }
+
+    angles[PITCH] = -pitch;
+    angles[YAW] = yaw;
+    angles[ROLL] = 0;
+}
+
+// AngleNormalize180 - normalize angle to [-180, 180] (used by BG_TouchJumpPad)
+float AngleNormalize180(float angle) {
+    angle = fmodf(angle, 360.0f);
+    if (angle > 180.0f) angle -= 360.0f;
+    if (angle < -180.0f) angle += 360.0f;
+    return angle;
+}

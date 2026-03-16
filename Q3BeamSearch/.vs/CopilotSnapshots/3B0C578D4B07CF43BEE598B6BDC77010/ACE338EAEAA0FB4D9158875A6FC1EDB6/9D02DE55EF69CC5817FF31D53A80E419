@@ -1,0 +1,321 @@
+﻿using Microsoft.AspNetCore.SignalR;
+using Newtonsoft.Json;
+using Q3BeamSearch.Hubs;
+using Q3BeamSearch.Models;
+using System.Text.RegularExpressions;
+
+namespace Q3BeamSearch.Services
+{
+    public class DemoSimulationService
+    {
+        private readonly IHubContext<SimulationHub> _hub;
+        private readonly IWebHostEnvironment _env;
+        private readonly object _lock = new();
+
+        public DemoSimulationService(IHubContext<SimulationHub> hub, IWebHostEnvironment env)
+        {
+            _hub = hub;
+            _env = env;
+        }
+
+        public async Task RunSimulationAndSaveDemo(string connectionId, double targetMaxSpeed, int targetJumps)
+        {
+            // Build a simple simulation plan using StrafeGuidance for a fixed duration.
+            Physics.UseAirWishCap = false;
+            var ps = new PlayerState();
+            int frames = 2500;
+            int frame = 0;
+            const double maxYawPerFrame = 5.0;
+            int jumpCooldown = 8;
+            int sinceJump = jumpCooldown;
+
+            var demoFrames = new List<FrameDto>(frames);
+
+            while (frame < frames)
+            {
+                sbyte str = (sbyte)(((frame / 30) % 2 == 0) ? 1 : -1);
+                double yawDelta = StrafeGuidance.YawDeltaToDOpt(ps, 1, str, maxYawPerFrame);
+                bool willJump = ps.OnGround && sinceJump >= jumpCooldown;
+                var input = new Input { Fwd = 1, Str = str, Jump = (byte)(willJump ? 1 : 0), YawDeltaDeg = yawDelta };
+                Physics.Step(ps, input);
+                sinceJump = willJump ? 0 : sinceJump + 1;
+
+                double speedXY = Math.Sqrt(ps.Vel.X * ps.Vel.X + ps.Vel.Y * ps.Vel.Y);
+                var dto = new FrameDto
+                {
+                    Frame = frame,
+                    X = ps.Pos.X,
+                    Y = ps.Pos.Y,
+                    Z = ps.Pos.Z,
+                    Speed = speedXY,
+                    OnGround = ps.OnGround,
+                    YawDeg = ps.YawDeg
+                };
+                demoFrames.Add(dto);
+
+                await _hub.Clients.Client(connectionId).SendAsync("frame", dto);
+
+                frame++;
+            }
+
+            // Save demo
+            string demosDir = Path.Combine(_env.ContentRootPath, "wwwroot", "demos");
+            Directory.CreateDirectory(demosDir);
+            string fileName = $"demo_{DateTime.UtcNow:yyyyMMdd_HHmmss}.json";
+            string filePath = Path.Combine(demosDir, fileName);
+            var json = JsonConvert.SerializeObject(demoFrames, Formatting.None);
+            await File.WriteAllTextAsync(filePath, json);
+
+            await _hub.Clients.Client(connectionId).SendAsync("demoSaved", fileName);
+        }
+
+        public async Task PlayDemoToClient(string connectionId, string fileName)
+        {
+            string demosDir = Path.Combine(_env.ContentRootPath, "wwwroot", "demos");
+            string filePath = Path.Combine(demosDir, fileName);
+            
+            if (!File.Exists(filePath)) return;
+
+            List<FrameDto> frames;
+            
+            // Check if it's a CFG file or JSON file
+            if (fileName.EndsWith(".cfg", StringComparison.OrdinalIgnoreCase))
+            {
+                // Parse CFG file and convert to frames
+                frames = await ParseCfgToDemo(filePath);
+            }
+            else
+            {
+                // Load JSON demo file
+                var json = await File.ReadAllTextAsync(filePath);
+                frames = JsonConvert.DeserializeObject<List<FrameDto>>(json) ?? new List<FrameDto>();
+            }
+
+            foreach (var f in frames)
+            {
+                await _hub.Clients.Client(connectionId).SendAsync("frame", f);
+            }
+        }
+
+        /// <summary>
+        /// Parse a movement.cfg file and convert to demo frames
+        /// </summary>
+        private async Task<List<FrameDto>> ParseCfgToDemo(string cfgFilePath)
+        {
+            var lines = await File.ReadAllLinesAsync(cfgFilePath);
+            var frames = new List<FrameDto>();
+            
+            // Parse the CFG and simulate the movement
+            var inputs = ParseCfgToInputs(lines);
+            
+            // Simulate the movement to generate demo frames
+            var ps = new PlayerState();
+            for (int i = 0; i < inputs.Count; i++)
+            {
+                var input = inputs[i];
+                Physics.Step(ps, input);
+                
+                double speedXY = Math.Sqrt(ps.Vel.X * ps.Vel.X + ps.Vel.Y * ps.Vel.Y);
+                var frame = new FrameDto
+                {
+                    Frame = i,
+                    X = ps.Pos.X,
+                    Y = ps.Pos.Y,
+                    Z = ps.Pos.Z,
+                    Speed = speedXY,
+                    OnGround = ps.OnGround,
+                    YawDeg = ps.YawDeg
+                };
+                frames.Add(frame);
+            }
+            
+            return frames;
+        }
+
+        /// <summary>
+        /// Parse CFG commands to Input sequence
+        /// </summary>
+        private List<Input> ParseCfgToInputs(string[] lines)
+        {
+            var inputs = new List<Input>();
+            var currentInput = new Input();
+            
+            // State tracking
+            bool forwardHeld = false, backHeld = false;
+            bool moveLeftHeld = false, moveRightHeld = false;
+            bool leftTurnHeld = false, rightTurnHeld = false;
+            double currentYawSpeed = 140.0; // Default Q3 yaw speed
+            
+            foreach (var line in lines)
+            {
+                var trimmed = line.Trim();
+                if (string.IsNullOrEmpty(trimmed) || trimmed.StartsWith("//"))
+                    continue;
+
+                // Split commands separated by semicolons
+                var commands = trimmed.Split(';', StringSplitOptions.RemoveEmptyEntries);
+                
+                foreach (var cmd in commands)
+                {
+                    var command = cmd.Trim();
+                    
+                    // Parse movement commands
+                    if (command == "+forward")
+                    {
+                        forwardHeld = true;
+                        currentInput.Fwd = 1;
+                    }
+                    else if (command == "-forward")
+                    {
+                        forwardHeld = false;
+                        currentInput.Fwd = (sbyte)(backHeld ? -1 : 0);
+                    }
+                    else if (command == "+back")
+                    {
+                        backHeld = true;
+                        currentInput.Fwd = -1;
+                    }
+                    else if (command == "-back")
+                    {
+                        backHeld = false;
+                        currentInput.Fwd = (sbyte)(forwardHeld ? 1 : 0);
+                    }
+                    else if (command == "+moveleft")
+                    {
+                        moveLeftHeld = true;
+                        currentInput.Str = -1;
+                    }
+                    else if (command == "-moveleft")
+                    {
+                        moveLeftHeld = false;
+                        currentInput.Str = (sbyte)(moveRightHeld ? 1 : 0);
+                    }
+                    else if (command == "+moveright")
+                    {
+                        moveRightHeld = true;
+                        currentInput.Str = 1;
+                    }
+                    else if (command == "-moveright")
+                    {
+                        moveRightHeld = false;
+                        currentInput.Str = (sbyte)(moveLeftHeld ? -1 : 0);
+                    }
+                    else if (command == "+left")
+                    {
+                        leftTurnHeld = true;
+                    }
+                    else if (command == "-left")
+                    {
+                        leftTurnHeld = false;
+                    }
+                    else if (command == "+right")
+                    {
+                        rightTurnHeld = true;
+                    }
+                    else if (command == "-right")
+                    {
+                        rightTurnHeld = false;
+                    }
+                    else if (command == "+moveup")
+                    {
+                        currentInput.Jump = 1;
+                    }
+                    else if (command == "-moveup")
+                    {
+                        currentInput.Jump = 0;
+                    }
+                    else if (command.StartsWith("seta cl_yawspeed "))
+                    {
+                        var match = Regex.Match(command, @"seta cl_yawspeed\s+([\d.]+)");
+                        if (match.Success && double.TryParse(match.Groups[1].Value, out double yawSpeed))
+                        {
+                            currentYawSpeed = yawSpeed;
+                        }
+                    }
+                    else if (command.StartsWith("wait "))
+                    {
+                        var match = Regex.Match(command, @"wait\s+(\d+)");
+                        if (match.Success && int.TryParse(match.Groups[1].Value, out int waitUnits))
+                        {
+                            // Each wait unit is 2 frames in the CFG (wait 2 = 1 frame at 125fps)
+                            int frames = waitUnits / 2;
+                            
+                            // Calculate yaw delta for this frame
+                            double yawDelta = 0;
+                            if (leftTurnHeld || rightTurnHeld)
+                            {
+                                // Convert yaw speed per second to yaw delta per frame
+                                double yawPerFrame = currentYawSpeed / Q3.FPS;
+                                yawDelta = leftTurnHeld ? yawPerFrame : -yawPerFrame;
+                            }
+                            currentInput.YawDeltaDeg = yawDelta;
+                            
+                            // Add frames for the wait period
+                            for (int i = 0; i < Math.Max(1, frames); i++)
+                            {
+                                inputs.Add(new Input
+                                {
+                                    Fwd = currentInput.Fwd,
+                                    Str = currentInput.Str,
+                                    Jump = currentInput.Jump,
+                                    YawDeltaDeg = currentInput.YawDeltaDeg
+                                });
+                            }
+                            
+                            // Reset jump after one frame
+                            currentInput.Jump = 0;
+                        }
+                    }
+                }
+            }
+            
+            return inputs;
+        }
+
+        /// <summary>
+        /// Convert exported CFG files from console app to web-compatible JSON demos
+        /// </summary>
+        public async Task ConvertConsoleCfgFiles()
+        {
+            var demosDir = Path.Combine(_env.ContentRootPath, "wwwroot", "demos");
+            Directory.CreateDirectory(demosDir);
+            
+            // Look for movement.cfg in the console app directory and root directory
+            var possiblePaths = new[]
+            {
+                Path.Combine(_env.ContentRootPath, "movement.cfg"),
+                Path.Combine(_env.ContentRootPath, "..", "Q3BeamSearch.Console", "movement.cfg"),
+                Path.Combine(Directory.GetCurrentDirectory(), "movement.cfg")
+            };
+            
+            foreach (var cfgPath in possiblePaths)
+            {
+                if (File.Exists(cfgPath))
+                {
+                    try
+                    {
+                        var frames = await ParseCfgToDemo(cfgPath);
+                        var fileName = $"movement_{DateTime.UtcNow:yyyyMMdd_HHmmss}.json";
+                        var outputPath = Path.Combine(demosDir, fileName);
+                        
+                        var json = JsonConvert.SerializeObject(frames, Formatting.None);
+                        await File.WriteAllTextAsync(outputPath, json);
+                        
+                        Console.WriteLine($"Converted {cfgPath} to {fileName} with {frames.Count} frames");
+                        
+                        // Also copy the original CFG file to demos folder for direct playback
+                        var cfgFileName = $"movement_{DateTime.UtcNow:yyyyMMdd_HHmmss}.cfg";
+                        var cfgDestPath = Path.Combine(demosDir, cfgFileName);
+                        File.Copy(cfgPath, cfgDestPath, true);
+                        
+                        Console.WriteLine($"Copied CFG file to {cfgFileName}");
+                    }
+                    catch (Exception ex)
+                    {
+                        Console.WriteLine($"Error converting {cfgPath}: {ex.Message}");
+                    }
+                }
+            }
+        }
+    }
+}

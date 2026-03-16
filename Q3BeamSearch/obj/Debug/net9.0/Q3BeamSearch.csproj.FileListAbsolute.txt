@@ -1,0 +1,42 @@
+C:\Users\rollm\Desktop\quake 3 arena bot\Q3BeamSearch\bin\Debug\net9.0\Q3BeamSearch.exe
+C:\Users\rollm\Desktop\quake 3 arena bot\Q3BeamSearch\bin\Debug\net9.0\Q3BeamSearch.deps.json
+C:\Users\rollm\Desktop\quake 3 arena bot\Q3BeamSearch\bin\Debug\net9.0\Q3BeamSearch.runtimeconfig.json
+C:\Users\rollm\Desktop\quake 3 arena bot\Q3BeamSearch\bin\Debug\net9.0\Q3BeamSearch.dll
+C:\Users\rollm\Desktop\quake 3 arena bot\Q3BeamSearch\bin\Debug\net9.0\Q3BeamSearch.pdb
+C:\Users\rollm\Desktop\quake 3 arena bot\Q3BeamSearch\obj\Debug\net9.0\Q3BeamSearch.GeneratedMSBuildEditorConfig.editorconfig
+C:\Users\rollm\Desktop\quake 3 arena bot\Q3BeamSearch\obj\Debug\net9.0\Q3BeamSearch.AssemblyInfoInputs.cache
+C:\Users\rollm\Desktop\quake 3 arena bot\Q3BeamSearch\obj\Debug\net9.0\Q3BeamSearch.AssemblyInfo.cs
+C:\Users\rollm\Desktop\quake 3 arena bot\Q3BeamSearch\obj\Debug\net9.0\Q3BeamSearch.csproj.CoreCompileInputs.cache
+C:\Users\rollm\Desktop\quake 3 arena bot\Q3BeamSearch\obj\Debug\net9.0\Q3BeamSearch.dll
+C:\Users\rollm\Desktop\quake 3 arena bot\Q3BeamSearch\obj\Debug\net9.0\refint\Q3BeamSearch.dll
+C:\Users\rollm\Desktop\quake 3 arena bot\Q3BeamSearch\obj\Debug\net9.0\Q3BeamSearch.pdb
+C:\Users\rollm\Desktop\quake 3 arena bot\Q3BeamSearch\obj\Debug\net9.0\Q3BeamSearch.genruntimeconfig.cache
+C:\Users\rollm\Desktop\quake 3 arena bot\Q3BeamSearch\obj\Debug\net9.0\ref\Q3BeamSearch.dll
+C:\Users\hammoudc\OneDrive - Reed Elsevier Group ICO Reed Elsevier Inc\Desktop\repos\Q3BeamSearch\bin\Debug\net9.0\Q3BeamSearch.exe
+C:\Users\hammoudc\OneDrive - Reed Elsevier Group ICO Reed Elsevier Inc\Desktop\repos\Q3BeamSearch\bin\Debug\net9.0\Q3BeamSearch.deps.json
+C:\Users\hammoudc\OneDrive - Reed Elsevier Group ICO Reed Elsevier Inc\Desktop\repos\Q3BeamSearch\bin\Debug\net9.0\Q3BeamSearch.runtimeconfig.json
+C:\Users\hammoudc\OneDrive - Reed Elsevier Group ICO Reed Elsevier Inc\Desktop\repos\Q3BeamSearch\bin\Debug\net9.0\Q3BeamSearch.dll
+C:\Users\hammoudc\OneDrive - Reed Elsevier Group ICO Reed Elsevier Inc\Desktop\repos\Q3BeamSearch\bin\Debug\net9.0\Q3BeamSearch.pdb
+C:\Users\hammoudc\OneDrive - Reed Elsevier Group ICO Reed Elsevier Inc\Desktop\repos\Q3BeamSearch\obj\Debug\net9.0\Q3BeamSearch.GeneratedMSBuildEditorConfig.editorconfig
+C:\Users\hammoudc\OneDrive - Reed Elsevier Group ICO Reed Elsevier Inc\Desktop\repos\Q3BeamSearch\obj\Debug\net9.0\Q3BeamSearch.AssemblyInfoInputs.cache
+C:\Users\hammoudc\OneDrive - Reed Elsevier Group ICO Reed Elsevier Inc\Desktop\repos\Q3BeamSearch\obj\Debug\net9.0\Q3BeamSearch.AssemblyInfo.cs
+C:\Users\hammoudc\OneDrive - Reed Elsevier Group ICO Reed Elsevier Inc\Desktop\repos\Q3BeamSearch\obj\Debug\net9.0\Q3BeamSearch.csproj.CoreCompileInputs.cache
+C:\Users\hammoudc\OneDrive - Reed Elsevier Group ICO Reed Elsevier Inc\Desktop\repos\Q3BeamSearch\obj\Debug\net9.0\Q3BeamSearch.dll
+C:\Users\hammoudc\OneDrive - Reed Elsevier Group ICO Reed Elsevier Inc\Desktop\repos\Q3BeamSearch\obj\Debug\net9.0\refint\Q3BeamSearch.dll
+C:\Users\hammoudc\OneDrive - Reed Elsevier Group ICO Reed Elsevier Inc\Desktop\repos\Q3BeamSearch\obj\Debug\net9.0\Q3BeamSearch.pdb
+C:\Users\hammoudc\OneDrive - Reed Elsevier Group ICO Reed Elsevier Inc\Desktop\repos\Q3BeamSearch\obj\Debug\net9.0\Q3BeamSearch.genruntimeconfig.cache
+C:\Users\hammoudc\OneDrive - Reed Elsevier Group ICO Reed Elsevier Inc\Desktop\repos\Q3BeamSearch\obj\Debug\net9.0\ref\Q3BeamSearch.dll
+C:\Users\hammoudc\OneDrive - Reed Elsevier Group ICO Reed Elsevier Inc\Desktop\repos\Q3BeamSearch\bin\Debug\net9.0\Q3BeamSearch.staticwebassets.runtime.json
+C:\Users\hammoudc\OneDrive - Reed Elsevier Group ICO Reed Elsevier Inc\Desktop\repos\Q3BeamSearch\bin\Debug\net9.0\Q3BeamSearch.staticwebassets.endpoints.json
+C:\Users\hammoudc\OneDrive - Reed Elsevier Group ICO Reed Elsevier Inc\Desktop\repos\Q3BeamSearch\obj\Debug\net9.0\rpswa.dswa.cache.json
+C:\Users\hammoudc\OneDrive - Reed Elsevier Group ICO Reed Elsevier Inc\Desktop\repos\Q3BeamSearch\obj\Debug\net9.0\Q3BeamSearch.MvcApplicationPartsAssemblyInfo.cache
+C:\Users\hammoudc\OneDrive - Reed Elsevier Group ICO Reed Elsevier Inc\Desktop\repos\Q3BeamSearch\obj\Debug\net9.0\rjimswa.dswa.cache.json
+C:\Users\hammoudc\OneDrive - Reed Elsevier Group ICO Reed Elsevier Inc\Desktop\repos\Q3BeamSearch\obj\Debug\net9.0\rjsmrazor.dswa.cache.json
+C:\Users\hammoudc\OneDrive - Reed Elsevier Group ICO Reed Elsevier Inc\Desktop\repos\Q3BeamSearch\obj\Debug\net9.0\rjsmcshtml.dswa.cache.json
+C:\Users\hammoudc\OneDrive - Reed Elsevier Group ICO Reed Elsevier Inc\Desktop\repos\Q3BeamSearch\obj\Debug\net9.0\scopedcss\bundle\Q3BeamSearch.styles.css
+C:\Users\hammoudc\OneDrive - Reed Elsevier Group ICO Reed Elsevier Inc\Desktop\repos\Q3BeamSearch\obj\Debug\net9.0\compressed\g36j9x0qx8-wffio3wf26.gz
+C:\Users\hammoudc\OneDrive - Reed Elsevier Group ICO Reed Elsevier Inc\Desktop\repos\Q3BeamSearch\obj\Debug\net9.0\staticwebassets.build.json
+C:\Users\hammoudc\OneDrive - Reed Elsevier Group ICO Reed Elsevier Inc\Desktop\repos\Q3BeamSearch\obj\Debug\net9.0\staticwebassets.build.json.cache
+C:\Users\hammoudc\OneDrive - Reed Elsevier Group ICO Reed Elsevier Inc\Desktop\repos\Q3BeamSearch\obj\Debug\net9.0\staticwebassets.development.json
+C:\Users\hammoudc\OneDrive - Reed Elsevier Group ICO Reed Elsevier Inc\Desktop\repos\Q3BeamSearch\obj\Debug\net9.0\staticwebassets.build.endpoints.json
+C:\Users\hammoudc\OneDrive - Reed Elsevier Group ICO Reed Elsevier Inc\Desktop\repos\Q3BeamSearch\obj\Debug\net9.0\staticwebassets.upToDateCheck.txt

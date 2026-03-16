@@ -1,0 +1,30 @@
+﻿// Stubs for functions oDFe expects but we don't need in browser
+
+#include "q_shared.h"
+
+// Trap function (error handling)
+void trap_Error(const char *fmt, ...) {
+    printf("ERROR: %s\n", fmt);
+}
+
+// Trace function (collision detection - simplified for now)
+void trap_Trace(trace_t *results, const vec3_t start, const vec3_t mins, 
+                const vec3_t maxs, const vec3_t end, int passEntityNum, int contentmask) {
+    // Simplified: no collision
+    VectorCopy(end, results->endpos);
+    results->fraction = 1.0;
+    results->allsolid = qfalse;
+    results->startsolid = qfalse;
+    results->entityNum = ENTITYNUM_NONE;
+}
+
+// Point contents (what's at this point)
+int trap_PointContents(const vec3_t point, int passEntityNum) {
+    // Simplified: always in air
+    return 0;
+}
+
+// Print function
+void trap_Print(const char *msg) {
+    printf("%s", msg);
+}

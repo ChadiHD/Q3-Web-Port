@@ -1,0 +1,84 @@
+﻿using Microsoft.AspNetCore.SignalR;
+using Newtonsoft.Json;
+using Q3BeamSearch.Hubs;
+using Q3BeamSearch.Models;
+
+namespace Q3BeamSearch.Services
+{
+    public class DemoSimulationService
+    {
+        private readonly IHubContext<SimulationHub> _hub;
+        private readonly IWebHostEnvironment _env;
+        private readonly object _lock = new();
+
+        public DemoSimulationService(IHubContext<SimulationHub> hub, IWebHostEnvironment env)
+        {
+            _hub = hub;
+            _env = env;
+        }
+
+        public async Task RunSimulationAndSaveDemo(string connectionId, double targetMaxSpeed, int targetJumps)
+        {
+            // Build a simple simulation plan using StrafeGuidance for a fixed duration.
+            Physics.UseAirWishCap = false;
+            var ps = new PlayerState();
+            int frames = 2500;
+            int frame = 0;
+            const double maxYawPerFrame = 5.0;
+            int jumpCooldown = 8;
+            int sinceJump = jumpCooldown;
+
+            var demoFrames = new List<FrameDto>(frames);
+
+            while (frame < frames)
+            {
+                sbyte str = (sbyte)(((frame / 30) % 2 == 0) ? 1 : -1);
+                double yawDelta = StrafeGuidance.YawDeltaToDOpt(ps, 1, str, maxYawPerFrame);
+                bool willJump = ps.OnGround && sinceJump >= jumpCooldown;
+                var input = new Input { Fwd = 1, Str = str, Jump = (byte)(willJump ? 1 : 0), YawDeltaDeg = yawDelta };
+                Physics.Step(ps, input);
+                sinceJump = willJump ? 0 : sinceJump + 1;
+
+                double speedXY = Math.Sqrt(ps.Vel.X * ps.Vel.X + ps.Vel.Y * ps.Vel.Y);
+                var dto = new FrameDto
+                {
+                    Frame = frame,
+                    X = ps.Pos.X,
+                    Y = ps.Pos.Y,
+                    Z = ps.Pos.Z,
+                    Speed = speedXY,
+                    OnGround = ps.OnGround,
+                    YawDeg = ps.YawDeg
+                };
+                demoFrames.Add(dto);
+
+                await _hub.Clients.Client(connectionId).SendAsync("frame", dto);
+
+                frame++;
+            }
+
+            // Save demo
+            string demosDir = Path.Combine(_env.ContentRootPath, "wwwroot", "demos");
+            Directory.CreateDirectory(demosDir);
+            string fileName = $"demo_{DateTime.UtcNow:yyyyMMdd_HHmmss}.json";
+            string filePath = Path.Combine(demosDir, fileName);
+            var json = JsonConvert.SerializeObject(demoFrames, Formatting.None);
+            await File.WriteAllTextAsync(filePath, json);
+
+            await _hub.Clients.Client(connectionId).SendAsync("demoSaved", fileName);
+        }
+
+        public async Task PlayDemoToClient(string connectionId, string fileName)
+        {
+            string path = Path.Combine(_env.ContentRootPath, "wwwroot", "demos", fileName);
+            if (!File.Exists(path)) return;
+            var json = await File.ReadAllTextAsync(path);
+            var frames = JsonConvert.DeserializeObject<List<FrameDto>>(json) ?? new List<FrameDto>();
+
+            foreach (var f in frames)
+            {
+                await _hub.Clients.Client(connectionId).SendAsync("frame", f);
+            }
+        }
+    }
+}

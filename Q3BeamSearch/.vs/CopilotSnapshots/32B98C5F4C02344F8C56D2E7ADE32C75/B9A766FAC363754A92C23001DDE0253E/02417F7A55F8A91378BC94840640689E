@@ -1,0 +1,1580 @@
+﻿<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Q3 Movement 3D Viewer - Enhanced with Entities</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            margin: 0;
+            padding: 0;
+            background: #1a1a1a;
+            color: #fff;
+            overflow: hidden;
+        }
+
+        .viewer-container {
+            position: relative;
+            width: 100vw;
+            height: 100vh;
+        }
+
+        .controls-overlay {
+            position: absolute;
+            top: 20px;
+            left: 20px;
+            z-index: 1000;
+            background: rgba(42, 42, 42, 0.9);
+            padding: 20px;
+            border-radius: 8px;
+            min-width: 300px;
+            backdrop-filter: blur(10px);
+            max-height: 80vh;
+            overflow-y: auto;
+        }
+
+        .controls-overlay h3 {
+            margin: 0 0 15px 0;
+            color: #4fc3f7;
+        }
+
+        .control-group {
+            margin-bottom: 15px;
+        }
+
+        .control-group label {
+            display: block;
+            margin-bottom: 5px;
+            color: #bbb;
+            font-size: 12px;
+        }
+
+        .control-row {
+            display: flex;
+            gap: 10px;
+            align-items: center;
+            margin-bottom: 10px;
+        }
+
+        button {
+            padding: 8px 12px;
+            background: #3a3a3a;
+            color: #fff;
+            border: 1px solid #555;
+            border-radius: 4px;
+            cursor: pointer;
+        }
+
+        button:hover {
+            background: #4a4a4a;
+        }
+
+        button.active {
+            background: #4fc3f7;
+            color: #000;
+        }
+
+        input[type="range"] {
+            flex: 1;
+            height: 6px;
+            background: #3a3a3a;
+            outline: none;
+            border-radius: 3px;
+        }
+
+        input[type="checkbox"] {
+            margin-right: 8px;
+        }
+
+        .frame-display {
+            background: #3a3a3a;
+            padding: 8px 12px;
+            border-radius: 4px;
+            font-weight: bold;
+            color: #4fc3f7;
+            min-width: 100px;
+            text-align: center;
+        }
+
+        .legend {
+            position: absolute;
+            bottom: 20px;
+            right: 20px;
+            background: rgba(42, 42, 42, 0.9);
+            padding: 15px;
+            border-radius: 8px;
+            backdrop-filter: blur(10px);
+            max-height: 50vh;
+            overflow-y: auto;
+        }
+
+        .legend h4 {
+            margin: 0 0 10px 0;
+            color: #4fc3f7;
+        }
+
+        .legend-item {
+            display: flex;
+            align-items: center;
+            margin-bottom: 5px;
+            font-size: 12px;
+        }
+
+        .legend-color {
+            width: 20px;
+            height: 3px;
+            margin-right: 10px;
+            border-radius: 1px;
+        }
+
+        .entity-info {
+            position: absolute;
+            top: 280px;
+            right: 20px;
+            background: rgba(42, 42, 42, 0.9);
+            padding: 15px;
+            border-radius: 8px;
+            backdrop-filter: blur(10px);
+            min-width: 200px;
+            max-height: 200px;
+            overflow-y: auto;
+        }
+
+        .entity-info h4 {
+            margin: 0 0 10px 0;
+            color: #4fc3f7;
+        }
+
+        .info-panel {
+            position: absolute;
+            top: 20px;
+            right: 20px;
+            background: rgba(42, 42, 42, 0.9);
+            padding: 15px;
+            border-radius: 8px;
+            backdrop-filter: blur(10px);
+            min-width: 200px;
+        }
+
+        .info-panel h4 {
+            margin: 0 0 10px 0;
+            color: #4fc3f7;
+        }
+
+        .info-item {
+            display: flex;
+            justify-content: space-between;
+            margin-bottom: 5px;
+            font-size: 12px;
+        }
+
+        .info-label {
+            color: #bbb;
+        }
+
+        .info-value {
+            color: #fff;
+            font-weight: bold;
+        }
+
+        .back-button {
+            position: absolute;
+            top: 20px;
+            right: 260px;
+            z-index: 1001;
+        }
+    </style>
+</head>
+
+<body>
+    <div class="viewer-container">
+        <div id="threejs-container"></div>
+
+        <button class="back-button" onclick="window.history.back()">← Back to Charts</button>
+
+        <div class="controls-overlay">
+            <h3>3D Movement Controls</h3>
+
+            <div class="control-group">
+                <div class="control-row">
+                    <label>Frame:</label>
+                    <input type="range" id="frameSlider" min="0" max="100" value="0" step="1">
+                    <div id="frameDisplay" class="frame-display">0 / 0</div>
+                </div>
+            </div>
+
+            <div class="control-group">
+                <div class="control-row">
+                    <button id="btnFirst">⏮</button>
+                    <button id="btnPrev">⏴</button>
+                    <button id="btnPlay">⏯</button>
+                    <button id="btnNext">⏵</button>
+                    <button id="btnLast">⏭</button>
+                    <select id="playbackSpeed">
+                        <option value="0.10">0.10x</option>
+                        <option value="0.25">0.25x</option>
+                        <option value="0.5">0.5x</option>
+                        <option value="1" selected>1x</option>
+                        <option value="2">2x</option>
+                        <option value="4">4x</option>
+                    </select>
+                </div>
+            </div>
+
+            <div class="control-group">
+                <label>Map Controls:</label>
+                <div class="control-row">
+                    <input type="file" id="bspFileInput" accept=".bsp,.pk3" style="display: none;">
+                    <button id="loadBspButton">Load BSP/PK3 Map</button>
+                    <button id="toggleWireframe">Toggle Wireframe</button>
+                </div>
+            </div>
+
+            <div class="control-group">
+                <label>Movement Visualization:</label>
+                <div style="display: flex; flex-direction: column; gap: 5px;">
+                    <label><input type="checkbox" id="showPath" checked> Movement Path</label>
+                    <label><input type="checkbox" id="showVelocity" checked> Velocity Vector</label>
+                    <label><input type="checkbox" id="showYaw" checked> View Direction</label>
+                    <label><input type="checkbox" id="showWish" checked> Wish Direction</label>
+                    <label><input type="checkbox" id="showGround" checked> Ground Contact</label>
+                    <label><input type="checkbox" id="showTrail" checked> Trail Effect</label>
+                </div>
+            </div>
+
+            <div class="control-group">
+                <label>Map Elements:</label>
+                <div style="display: flex; flex-direction: column; gap: 5px;">
+                    <label><input type="checkbox" id="showMap" checked> BSP Map</label>
+                    <label><input type="checkbox" id="showSpawns" checked> Player Spawns</label>
+                    <label><input type="checkbox" id="showTriggers" checked> Triggers</label>
+                    <label><input type="checkbox" id="showItems" checked> Items</label>
+                </div>
+            </div>
+
+            <div class="control-group">
+                <div class="control-row">
+                    <button id="resetCamera">Reset Camera</button>
+                    <button id="topView">Top View</button>
+                    <button id="sideView">Side View</button>
+                </div>
+            </div>
+        </div>
+
+        <div class="info-panel">
+            <h4>Current Frame Info</h4>
+            <div class="info-item">
+                <span class="info-label">Frame:</span>
+                <span class="info-value" id="infoFrame">0</span>
+            </div>
+            <div class="info-item">
+                <span class="info-label">Speed:</span>
+                <span class="info-value" id="infoSpeed">0 ups</span>
+            </div>
+            <div class="info-item">
+                <span class="info-label">Position:</span>
+                <span class="info-value" id="infoPosition">0, 0, 0</span>
+            </div>
+            <div class="info-item">
+                <span class="info-label">Yaw:</span>
+                <span class="info-value" id="infoYaw">0 degrees</span>
+            </div>
+            <div class="info-item">
+                <span class="info-label">Ground:</span>
+                <span class="info-value" id="infoGround">No</span>
+            </div>
+            <div class="info-item">
+                <span class="info-label">Height:</span>
+                <span class="info-value" id="infoHeight">0</span>
+            </div>
+        </div>
+
+        <div class="entity-info">
+            <h4>Map Entities</h4>
+            <div id="entityCount">Loading...</div>
+        </div>
+
+        <div class="legend">
+            <h4>Legend</h4>
+            <div class="legend-item">
+                <div class="legend-color" style="background: #4fc3f7;"></div>
+                <span>Movement Path</span>
+            </div>
+            <div class="legend-item">
+                <div class="legend-color" style="background: #ff6b6b;"></div>
+                <span>Current Position</span>
+            </div>
+            <div class="legend-item">
+                <div class="legend-color" style="background: #4caf50;"></div>
+                <span>Velocity Vector</span>
+            </div>
+            <div class="legend-item">
+                <div class="legend-color" style="background: #ff9800;"></div>
+                <span>View Direction</span>
+            </div>
+            <div class="legend-item">
+                <div class="legend-color" style="background: #9c27b0;"></div>
+                <span>Wish Direction</span>
+            </div>
+            <div class="legend-item">
+                <div class="legend-color" style="background: #f44336;"></div>
+                <span>Ground Contact</span>
+            </div>
+            <div class="legend-item">
+                <div class="legend-color" style="background: #00ff00;"></div>
+                <span>Player Spawns</span>
+            </div>
+            <div class="legend-item">
+                <div class="legend-color" style="background: #ffff00;"></div>
+                <span>Triggers</span>
+            </div>
+            <div class="legend-item">
+                <div class="legend-color" style="background: #00ffff;"></div>
+                <span>Items</span>
+            </div>
+        </div>
+    </div>
+
+    <script type="importmap">
+    {
+        "imports": {
+            "three": "https://unpkg.com/three@0.160.0/build/three.module.js",
+            "three/addons/": "https://unpkg.com/three@0.160.0/examples/jsm/",
+            "jszip": "https://cdn.skypack.dev/jszip@3.10.1"
+        }
+    }
+    </script>
+
+    <script type="module">
+        import * as THREE from 'three';
+        import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+        import JSZip from 'jszip';
+
+        // Global variables
+        let scene, camera, renderer, controls;
+        let currentFrames = [];
+        let currentFrame = 0;
+        let isPlaying = false;
+        let playbackInterval = null;
+        let mapMesh = null;
+        let isWireframeMode = false;
+        
+        // 3D visualization objects
+        let playerSphere, pathGeometry, pathMaterial, pathLine;
+        let velocityArrow, yawArrow, wishArrow, groundIndicator;
+        let trailPoints = [];
+        
+        // Entity visualization objects
+        let spawnObjects = [];
+        let triggerObjects = [];
+        let itemObjects = [];
+        let currentMapData = null;
+
+        // Enhanced BSP/PK3 Map Loader Class
+        class EnhancedMapLoader {
+            constructor() {
+                this.mapData = null;
+                this.textures = new Map();
+                this.materials = new Map();
+            }
+
+            // Load PK3 or BSP from file
+            async loadMapFromFile(file) {
+                const fileName = file.name.toLowerCase();
+                
+                if (fileName.endsWith('.pk3')) {
+                    return this.loadPK3FromFile(file);
+                } else if (fileName.endsWith('.bsp')) {
+                    return this.loadBSPFromFile(file);
+                } else {
+                    throw new Error('Unsupported file format. Please select a .bsp or .pk3 file.');
+                }
+            }
+
+            // Load PK3 file (ZIP archive)
+            async loadPK3FromFile(file) {
+                console.log('Loading PK3 file:', file.name);
+                
+                try {
+                    const zip = await JSZip.loadAsync(file);
+                    console.log('PK3 loaded, extracting contents...');
+                    
+                    // Find BSP file in maps/ directory
+                    let bspFile = null;
+                    
+                    zip.forEach((relativePath, zipEntry) => {
+                        if (relativePath.startsWith('maps/') && relativePath.endsWith('.bsp')) {
+                            bspFile = zipEntry;
+                        }
+                    });
+                    
+                    if (!bspFile) {
+                        throw new Error('No BSP file found in maps/ directory');
+                    }
+                    
+                    console.log('Found BSP file:', bspFile.name);
+                    const bspArrayBuffer = await bspFile.async('arraybuffer');
+                    const bspData = this.parseBSP(bspArrayBuffer);
+                    
+                    // Load textures
+                    const textures = await this.loadTexturesFromPK3(zip);
+                    
+                    // Load shaders (if present)
+                    const shaders = await this.loadShadersFromPK3(zip);
+                    
+                    return {
+                        type: 'pk3',
+                        bsp: bspData,
+                        textures: textures,
+                        shaders: shaders,
+                        zipFile: zip
+                    };
+                    
+                } catch (error) {
+                    console.error('Failed to load PK3:', error);
+                    throw error;
+                }
+            }
+
+            // Load textures from PK3
+            async loadTexturesFromPK3(zip) {
+                const textures = new Map();
+                const texturePromises = [];
+                
+                zip.forEach((relativePath, zipEntry) => {
+                    if (relativePath.startsWith('textures/') && 
+                        (relativePath.endsWith('.jpg') || 
+                         relativePath.endsWith('.tga') || 
+                         relativePath.endsWith('.png'))) {
+                        
+                        const textureName = relativePath.split('/').pop().split('.')[0];
+                        
+                        const promise = zipEntry.async('blob').then(blob => {
+                            return new Promise((resolve) => {
+                                const img = new Image();
+                                img.onload = () => {
+                                    const texture = new THREE.Texture(img);
+                                    texture.needsUpdate = true;
+                                    texture.wrapS = THREE.RepeatWrapping;
+                                    texture.wrapT = THREE.RepeatWrapping;
+                                    textures.set(textureName.toLowerCase(), texture);
+                                    console.log('Loaded texture:', textureName);
+                                    resolve();
+                                };
+                                img.src = URL.createObjectURL(blob);
+                            });
+                        }).catch(error => {
+                            console.warn('Failed to load texture:', relativePath, error);
+                        });
+                        
+                        texturePromises.push(promise);
+                    }
+                });
+                
+                await Promise.all(texturePromises);
+                console.log(`Loaded ${textures.size} textures`);
+                return textures;
+            }
+
+            // Load shader scripts from PK3
+            async loadShadersFromPK3(zip) {
+                const shaders = new Map();
+                
+                zip.forEach(async (relativePath, zipEntry) => {
+                    if (relativePath.startsWith('scripts/') && relativePath.endsWith('.shader')) {
+                        try {
+                            const shaderText = await zipEntry.async('text');
+                            this.parseShaderScript(shaderText, shaders);
+                        } catch (error) {
+                            console.warn('Failed to load shader:', relativePath, error);
+                        }
+                    }
+                });
+                
+                return shaders;
+            }
+
+            // Parse Quake 3 shader script
+            parseShaderScript(shaderText, shaders) {
+                const lines = shaderText.split('\n');
+                let currentShader = null;
+                
+                for (let line of lines) {
+                    line = line.trim();
+                    if (line.startsWith('//') || line === '') continue;
+                    
+                    if (line.includes('{')) {
+                        const shaderName = line.replace('{', '').trim();
+                        currentShader = {
+                            name: shaderName,
+                            stages: [],
+                            properties: {}
+                        };
+                    } else if (line.includes('}') && currentShader) {
+                        shaders.set(currentShader.name.toLowerCase(), currentShader);
+                        currentShader = null;
+                    } else if (currentShader && line.includes('map')) {
+                        const mapPath = line.replace('map', '').trim();
+                        currentShader.stages.push({ map: mapPath });
+                    }
+                }
+            }
+
+            // Load BSP from file
+            async loadBSPFromFile(file) {
+                return new Promise((resolve, reject) => {
+                    const reader = new FileReader();
+                    reader.onload = (e) => {
+                        try {
+                            const bspData = this.parseBSP(e.target.result);
+                            resolve({
+                                type: 'bsp',
+                                bsp: bspData,
+                                textures: new Map(),
+                                shaders: new Map()
+                            });
+                        } catch (error) {
+                            reject(error);
+                        }
+                    };
+                    reader.onerror = () => reject(new Error('Failed to read file'));
+                    reader.readAsArrayBuffer(file);
+                });
+            }
+
+            // Parse BSP file format
+            parseBSP(arrayBuffer) {
+                const dataView = new DataView(arrayBuffer);
+                let offset = 0;
+
+                // Read BSP header
+                const magic = dataView.getUint32(offset, true); offset += 4;
+                const version = dataView.getUint32(offset, true); offset += 4;
+
+                if (magic !== 0x50534249) { // "IBSP"
+                    throw new Error('Invalid BSP file format');
+                }
+
+                console.log(`BSP Version: ${version}`);
+
+                // Read directory entries (17 lumps for Q3 BSP)
+                const lumps = [];
+                for (let i = 0; i < 17; i++) {
+                    lumps.push({
+                        offset: dataView.getUint32(offset, true),
+                        length: dataView.getUint32(offset + 4, true)
+                    });
+                    offset += 8;
+                }
+
+                // Parse essential lumps
+                const vertices = this.parseVertices(arrayBuffer, lumps[10]);
+                const faces = this.parseFaces(arrayBuffer, lumps[13]);
+                const meshVerts = this.parseMeshVerts(arrayBuffer, lumps[11]);
+                const textures = this.parseTextures(arrayBuffer, lumps[1]);
+                
+                // Parse entities from lump 0 (LUMP_ENTITIES)
+                const entities = this.parseEntities(arrayBuffer, lumps[0]);
+
+                console.log(`Loaded: ${vertices.length} vertices, ${faces.length} faces, ${textures.length} textures, ${entities.length} entities`);
+
+                return {
+                    vertices,
+                    faces,
+                    meshVerts,
+                    textures,
+                    entities,
+                    lumps
+                };
+            }
+
+            // Parse entities from BSP (Lump 0)
+            parseEntities(arrayBuffer, lump) {
+                const entities = [];
+                
+                if (lump.length === 0) {
+                    console.warn('No entity data found in BSP');
+                    return entities;
+                }
+
+                // Entity data is stored as a null-terminated string
+                const entityString = new TextDecoder('utf-8').decode(
+                    new Uint8Array(arrayBuffer, lump.offset, lump.length)
+                );
+
+                console.log('Entity string length:', entityString.length);
+                
+                // Parse entity string format
+                const lines = entityString.split('\n');
+                let currentEntity = null;
+                let braceCount = 0;
+
+                for (let line of lines) {
+                    line = line.trim();
+                    if (line === '' || line.startsWith('//')) continue;
+
+                    if (line === '{') {
+                        braceCount++;
+                        if (braceCount === 1) {
+                            currentEntity = { properties: {} };
+                        }
+                    } else if (line === '}') {
+                        braceCount--;
+                        if (braceCount === 0 && currentEntity) {
+                            entities.push(currentEntity);
+                            currentEntity = null;
+                        }
+                    } else if (currentEntity && braceCount === 1) {
+                        // Parse property line: "key" "value"
+                        const match = line.match(/^"([^"]+)"\s+"([^"]*)"$/);
+                        if (match) {
+                            const [, key, value] = match;
+                            currentEntity.properties[key] = value;
+                        }
+                    }
+                }
+
+                console.log(`Parsed ${entities.length} entities`);
+                const categories = this.categorizeEntities(entities);
+                return entities;
+            }
+
+            // Categorize entities by type
+            categorizeEntities(entities) {
+                const categories = {
+                    players: [],
+                    triggers: [],
+                    items: [],
+                    lights: [],
+                    other: []
+                };
+
+                entities.forEach((entity, index) => {
+                    const classname = entity.properties.classname || '';
+                    entity.index = index;
+
+                    if (classname.includes('info_player') || classname.includes('info_spectator')) {
+                        categories.players.push(entity);
+                    } else if (classname.startsWith('trigger_')) {
+                        categories.triggers.push(entity);
+                    } else if (classname.startsWith('item_') || classname.startsWith('weapon_') || classname.startsWith('ammo_')) {
+                        categories.items.push(entity);
+                    } else if (classname.includes('light')) {
+                        categories.lights.push(entity);
+                    } else {
+                        categories.other.push(entity);
+                    }
+                });
+
+                console.log('Entity categories:', {
+                    players: categories.players.length,
+                    triggers: categories.triggers.length,
+                    items: categories.items.length,
+                    lights: categories.lights.length,
+                    other: categories.other.length
+                });
+
+                // Update UI
+                document.getElementById('entityCount').innerHTML = `
+                    <div>Players: ${categories.players.length}</div>
+                    <div>Triggers: ${categories.triggers.length}</div>
+                    <div>Items: ${categories.items.length}</div>
+                    <div>Lights: ${categories.lights.length}</div>
+                    <div>Other: ${categories.other.length}</div>
+                `;
+
+                return categories;
+            }
+
+            // Parse origin string "x y z" to array [x, y, z]
+            parseOrigin(originString) {
+                if (!originString) return [0, 0, 0];
+                const coords = originString.split(' ').map(parseFloat);
+                return coords.length >= 3 ? coords : [0, 0, 0];
+            }
+
+            // Parse angle to radians (Q3 uses degrees)
+            parseAngle(angleString) {
+                if (!angleString) return 0;
+                return parseFloat(angleString) * Math.PI / 180;
+            }
+
+            // Parse texture lump from BSP
+            parseTextures(arrayBuffer, lump) {
+                const textures = [];
+                const dataView = new DataView(arrayBuffer, lump.offset, lump.length);
+                const textureSize = 72;
+                const numTextures = lump.length / textureSize;
+
+                for (let i = 0; i < numTextures; i++) {
+                    const offset = i * textureSize;
+                    const nameBytes = new Uint8Array(arrayBuffer, lump.offset + offset, 64);
+                    
+                    let name = '';
+                    for (let j = 0; j < 64 && nameBytes[j] !== 0; j++) {
+                        name += String.fromCharCode(nameBytes[j]);
+                    }
+                    
+                    textures.push({
+                        name: name,
+                        flags: dataView.getUint32(offset + 64, true),
+                        contents: dataView.getUint32(offset + 68, true)
+                    });
+                }
+
+                return textures;
+            }
+
+            parseVertices(arrayBuffer, lump) {
+                const vertices = [];
+                const dataView = new DataView(arrayBuffer, lump.offset, lump.length);
+                const vertexSize = 44;
+                const numVertices = lump.length / vertexSize;
+
+                for (let i = 0; i < numVertices; i++) {
+                    const offset = i * vertexSize;
+                    vertices.push({
+                        position: [
+                            dataView.getFloat32(offset, true),
+                            dataView.getFloat32(offset + 4, true),
+                            dataView.getFloat32(offset + 8, true)
+                        ],
+                        texCoord: [
+                            dataView.getFloat32(offset + 12, true),
+                            dataView.getFloat32(offset + 16, true)
+                        ],
+                        normal: [
+                            dataView.getFloat32(offset + 28, true),
+                            dataView.getFloat32(offset + 32, true),
+                            dataView.getFloat32(offset + 36, true)
+                        ],
+                        color: [
+                            dataView.getUint8(offset + 40),
+                            dataView.getUint8(offset + 41),
+                            dataView.getUint8(offset + 42),
+                            dataView.getUint8(offset + 43)
+                        ]
+                    });
+                }
+
+                return vertices;
+            }
+
+            parseFaces(arrayBuffer, lump) {
+                const faces = [];
+                const dataView = new DataView(arrayBuffer, lump.offset, lump.length);
+                const faceSize = 104;
+                const numFaces = lump.length / faceSize;
+
+                for (let i = 0; i < numFaces; i++) {
+                    const offset = i * faceSize;
+                    faces.push({
+                        texture: dataView.getInt32(offset, true),
+                        type: dataView.getInt32(offset + 8, true),
+                        vertex: dataView.getInt32(offset + 12, true),
+                        numVerts: dataView.getInt32(offset + 16, true),
+                        meshVert: dataView.getInt32(offset + 20, true),
+                        numMeshVerts: dataView.getInt32(offset + 24, true)
+                    });
+                }
+
+                return faces;
+            }
+
+            parseMeshVerts(arrayBuffer, lump) {
+                const meshVerts = [];
+                const dataView = new DataView(arrayBuffer, lump.offset, lump.length);
+                const numMeshVerts = lump.length / 4;
+
+                for (let i = 0; i < numMeshVerts; i++) {
+                    meshVerts.push(dataView.getInt32(i * 4, true));
+                }
+
+                return meshVerts;
+            }
+
+            // Create Three.js geometry with materials
+            createThreeJSGeometry(mapData) {
+                const geometry = new THREE.BufferGeometry();
+                const positions = [];
+                const normals = [];
+                const uvs = [];
+                const colors = [];
+
+                // Process polygon and mesh faces
+                for (const face of mapData.bsp.faces) {
+                    if (face.type === 1 || face.type === 3) {
+                        for (let i = 0; i < face.numMeshVerts; i += 3) {
+                            for (let j = 0; j < 3; j++) {
+                                const meshVertIndex = face.meshVert + i + j;
+                                if (meshVertIndex < mapData.bsp.meshVerts.length) {
+                                    const vertIndex = face.vertex + mapData.bsp.meshVerts[meshVertIndex];
+                                    if (vertIndex < mapData.bsp.vertices.length) {
+                                        const vertex = mapData.bsp.vertices[vertIndex];
+                                        
+                                        // Convert Q3 coordinates to Three.js (swap Y and Z)
+                                        positions.push(
+                                            vertex.position[0], 
+                                            vertex.position[2], 
+                                            -vertex.position[1]
+                                        );
+                                        
+                                        normals.push(
+                                            vertex.normal[0], 
+                                            vertex.normal[2], 
+                                            -vertex.normal[1]
+                                        );
+                                        
+                                        uvs.push(vertex.texCoord[0], vertex.texCoord[1]);
+                                        
+                                        colors.push(
+                                            vertex.color[0] / 255,
+                                            vertex.color[1] / 255,
+                                            vertex.color[2] / 255
+                                        );
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+
+                geometry.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
+                geometry.setAttribute('normal', new THREE.Float32BufferAttribute(normals, 3));
+                geometry.setAttribute('uv', new THREE.Float32BufferAttribute(uvs, 2));
+                geometry.setAttribute('color', new THREE.Float32BufferAttribute(colors, 3));
+
+                geometry.computeBoundingBox();
+                return geometry;
+            }
+
+            // Create material based on available textures
+            createMaterial(mapData, wireframe = false) {
+                if (mapData.type === 'pk3' && mapData.textures.size > 0) {
+                    const firstTexture = mapData.textures.values().next().value;
+                    return new THREE.MeshLambertMaterial({
+                        map: firstTexture,
+                        transparent: true,
+                        opacity: wireframe ? 0.3 : 0.8,
+                        wireframe: wireframe,
+                        side: THREE.DoubleSide
+                    });
+                } else {
+                    return new THREE.MeshLambertMaterial({
+                        vertexColors: true,
+                        wireframe: wireframe,
+                        transparent: true,
+                        opacity: wireframe ? 0.5 : 0.7,
+                        side: THREE.DoubleSide
+                    });
+                }
+            }
+        }
+
+        // BSP loader instance
+        const bspLoader = new EnhancedMapLoader();
+
+        // Create entity visualization objects
+        function createEntityObjects(entities) {
+            // Clear existing entities
+            clearEntityObjects();
+
+            entities.forEach(entity => {
+                const classname = entity.properties.classname || '';
+                const origin = bspLoader.parseOrigin(entity.properties.origin);
+                const angle = bspLoader.parseAngle(entity.properties.angle);
+
+                // Convert Q3 coordinates to Three.js
+                const position = new THREE.Vector3(origin[0], origin[2], -origin[1]);
+
+                if (classname.includes('info_player') || classname.includes('info_spectator')) {
+                    createSpawnPoint(position, angle, classname);
+                } else if (classname.startsWith('trigger_')) {
+                    createTrigger(position, entity, classname);
+                } else if (classname.startsWith('item_') || classname.startsWith('weapon_') || classname.startsWith('ammo_')) {
+                    createItem(position, classname);
+                }
+            });
+
+            updateEntityVisibility();
+        }
+
+        function createSpawnPoint(position, angle, classname) {
+            const group = new THREE.Group();
+
+            // Spawn point marker
+            const geometry = new THREE.ConeGeometry(12, 24, 8);
+            const material = new THREE.MeshPhongMaterial({
+                color: classname.includes('deathmatch') ? 0x00ff00 : 0x00aa00,
+                transparent: true,
+                opacity: 0.8
+            });
+            const cone = new THREE.Mesh(geometry, material);
+            cone.position.y = 12;
+            group.add(cone);
+
+            // View direction arrow
+            const arrowGeometry = new THREE.ConeGeometry(6, 20, 8);
+            const arrowMaterial = new THREE.MeshPhongMaterial({ color: 0xffff00 });
+            const arrow = new THREE.Mesh(arrowGeometry, arrowMaterial);
+            arrow.position.set(0, 30, 0);
+            arrow.rotation.z = -Math.PI / 2;
+            arrow.rotation.y = angle;
+            group.add(arrow);
+
+            group.position.copy(position);
+            group.userData = { type: 'spawn', classname };
+            spawnObjects.push(group);
+            scene.add(group);
+        }
+
+        function createTrigger(position, entity, classname) {
+            // Parse trigger bounds if available
+            const model = entity.properties.model || '';
+            let size = 32; // Default trigger size
+
+            // Create trigger visualization as a wireframe box
+            const geometry = new THREE.BoxGeometry(size, size, size);
+            const material = new THREE.MeshBasicMaterial({
+                color: 0xffff00,
+                wireframe: true,
+                transparent: true,
+                opacity: 0.6
+            });
+            const trigger = new THREE.Mesh(geometry, material);
+            trigger.position.copy(position);
+            trigger.userData = { type: 'trigger', classname, entity };
+
+            triggerObjects.push(trigger);
+            scene.add(trigger);
+        }
+
+        function createItem(position, classname) {
+            let color = 0x00ffff;
+            let geometry;
+
+            // Different shapes for different item types
+            if (classname.includes('weapon_')) {
+                geometry = new THREE.BoxGeometry(16, 8, 16);
+                color = 0xff8800;
+            } else if (classname.includes('ammo_')) {
+                geometry = new THREE.CylinderGeometry(8, 8, 12, 8);
+                color = 0x8800ff;
+            } else {
+                geometry = new THREE.SphereGeometry(8, 12, 12);
+            }
+
+            const material = new THREE.MeshPhongMaterial({
+                color: color,
+                transparent: true,
+                opacity: 0.7
+            });
+            const item = new THREE.Mesh(geometry, material);
+            item.position.copy(position);
+            item.userData = { type: 'item', classname };
+
+            itemObjects.push(item);
+            scene.add(item);
+        }
+
+        function clearEntityObjects() {
+            spawnObjects.forEach(obj => scene.remove(obj));
+            triggerObjects.forEach(obj => scene.remove(obj));
+            itemObjects.forEach(obj => scene.remove(obj));
+            
+            spawnObjects = [];
+            triggerObjects = [];
+            itemObjects = [];
+        }
+
+        function updateEntityVisibility() {
+            const showSpawns = document.getElementById('showSpawns').checked;
+            const showTriggers = document.getElementById('showTriggers').checked;
+            const showItems = document.getElementById('showItems').checked;
+
+            spawnObjects.forEach(obj => obj.visible = showSpawns);
+            triggerObjects.forEach(obj => obj.visible = showTriggers);
+            itemObjects.forEach(obj => obj.visible = showItems);
+        }
+
+        function toggleWireframe() {
+            if (mapMesh && currentMapData) {
+                isWireframeMode = !isWireframeMode;
+                
+                const newMaterial = bspLoader.createMaterial(currentMapData, isWireframeMode);
+                mapMesh.material.dispose();
+                mapMesh.material = newMaterial;
+                
+                console.log('Wireframe mode:', isWireframeMode ? 'ON' : 'OFF');
+            }
+        }
+
+        // Load and display BSP map
+        async function loadBSPMap(file) {
+            try {
+                console.log('Loading map file:', file.name);
+                const mapData = await bspLoader.loadMapFromFile(file);
+                currentMapData = mapData;
+                
+                // Remove existing map
+                if (mapMesh) {
+                    scene.remove(mapMesh);
+                    mapMesh.geometry.dispose();
+                    mapMesh.material.dispose();
+                }
+
+                // Create Three.js geometry from BSP data
+                const geometry = bspLoader.createThreeJSGeometry(mapData);
+                const material = bspLoader.createMaterial(mapData, isWireframeMode);
+
+                // Create mesh
+                mapMesh = new THREE.Mesh(geometry, material);
+                mapMesh.name = 'BSP_Map';
+                scene.add(mapMesh);
+
+                // Create entity objects
+                if (mapData.bsp.entities) {
+                    createEntityObjects(mapData.bsp.entities);
+                }
+
+                console.log('Map loaded successfully!');
+                
+                // Update camera to fit map
+                const box = new THREE.Box3().setFromObject(mapMesh);
+                const center = box.getCenter(new THREE.Vector3());
+                const size = box.getSize(new THREE.Vector3());
+                
+                const maxDim = Math.max(size.x, size.y, size.z);
+                camera.position.set(
+                    center.x + maxDim,
+                    center.y + maxDim * 0.5,
+                    center.z + maxDim
+                );
+                controls.target.copy(center);
+                controls.update();
+
+            } catch (error) {
+                console.error('Failed to load map:', error);
+                alert('Failed to load map file: ' + error.message);
+            }
+        }
+
+        // Setup BSP controls
+        function setupBSPControls() {
+            const loadBspButton = document.getElementById('loadBspButton');
+            const bspFileInput = document.getElementById('bspFileInput');
+            const showMapCheckbox = document.getElementById('showMap');
+            const toggleWireframeButton = document.getElementById('toggleWireframe');
+
+            if (!loadBspButton || !bspFileInput || !showMapCheckbox) {
+                console.error('BSP control elements not found');
+                return;
+            }
+
+            // Load BSP button
+            loadBspButton.addEventListener('click', () => {
+                bspFileInput.click();
+            });
+
+            // File input change
+            bspFileInput.addEventListener('change', (e) => {
+                const file = e.target.files[0];
+                if (file && (file.name.toLowerCase().endsWith('.bsp') || file.name.toLowerCase().endsWith('.pk3'))) {
+                    loadBSPMap(file);
+                } else if (file) {
+                    alert('Please select a valid .bsp or .pk3 file');
+                }
+                e.target.value = '';
+            });
+
+            // Wireframe toggle
+            if (toggleWireframeButton) {
+                toggleWireframeButton.addEventListener('click', toggleWireframe);
+            }
+
+            // Show map checkbox
+            showMapCheckbox.addEventListener('change', (e) => {
+                if (mapMesh) {
+                    mapMesh.visible = e.target.checked;
+                }
+            });
+
+            // Entity visibility checkboxes
+            ['showSpawns', 'showTriggers', 'showItems'].forEach(id => {
+                const checkbox = document.getElementById(id);
+                if (checkbox) {
+                    checkbox.addEventListener('change', updateEntityVisibility);
+                }
+            });
+
+            console.log('BSP controls setup complete');
+        }
+
+        // Initialize Three.js
+        function initThreeJS() {
+            const container = document.getElementById('threejs-container');
+
+            // Scene setup
+            scene = new THREE.Scene();
+            scene.background = new THREE.Color(0x1a1a1a);
+            scene.fog = new THREE.Fog(0x1a1a1a, 1000, 10000);
+
+            // Camera setup
+            camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 1, 20000);
+            camera.position.set(500, 500, 500);
+
+            // Renderer setup
+            renderer = new THREE.WebGLRenderer({ antialias: true });
+            renderer.setSize(window.innerWidth, window.innerHeight);
+            renderer.shadowMap.enabled = true;
+            renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+            container.appendChild(renderer.domElement);
+
+            // Controls
+            controls = new OrbitControls(camera, renderer.domElement);
+            controls.enableDamping = true;
+            controls.dampingFactor = 0.05;
+            controls.screenSpacePanning = false;
+            controls.minDistance = 10;
+            controls.maxDistance = 5000;
+
+            // Enhanced lighting
+            const ambientLight = new THREE.AmbientLight(0x404040, 0.6);
+            scene.add(ambientLight);
+
+            const directionalLight = new THREE.DirectionalLight(0xffffff, 0.8);
+            directionalLight.position.set(1000, 1000, 500);
+            directionalLight.castShadow = true;
+            directionalLight.shadow.mapSize.width = 2048;
+            directionalLight.shadow.mapSize.height = 2048;
+            directionalLight.shadow.camera.far = 10000;
+            scene.add(directionalLight);
+
+            // Grid helper
+            const gridHelper = new THREE.GridHelper(2000, 50, 0x444444, 0x222222);
+            scene.add(gridHelper);
+
+            // Coordinate axes
+            const axesHelper = new THREE.AxesHelper(200);
+            scene.add(axesHelper);
+
+            // Initialize 3D objects
+            initializeObjects();
+
+            // Event listeners
+            window.addEventListener('resize', onWindowResize);
+            setupControlListeners();
+            setupBSPControls();
+
+            // Animation loop
+            animate();
+        }
+
+        function initializeObjects() {
+            // Player sphere (current position)
+            const sphereGeometry = new THREE.SphereGeometry(8, 16, 16);
+            const sphereMaterial = new THREE.MeshPhongMaterial({
+                color: 0xff6b6b,
+                emissive: 0x220000,
+                shininess: 100
+            });
+            playerSphere = new THREE.Mesh(sphereGeometry, sphereMaterial);
+            playerSphere.castShadow = true;
+            scene.add(playerSphere);
+
+            // Movement path line
+            pathGeometry = new THREE.BufferGeometry();
+            pathMaterial = new THREE.LineBasicMaterial({
+                color: 0x4fc3f7,
+                linewidth: 3,
+                transparent: true,
+                opacity: 0.8
+            });
+            pathLine = new THREE.Line(pathGeometry, pathMaterial);
+            scene.add(pathLine);
+
+            // Velocity vector arrow
+            velocityArrow = createArrow(0x4caf50, 'Velocity');
+            scene.add(velocityArrow);
+
+            // Yaw direction arrow
+            yawArrow = createArrow(0xff9800, 'Yaw');
+            scene.add(yawArrow);
+
+            // Wish direction arrow
+            wishArrow = createArrow(0x9c27b0, 'Wish');
+            scene.add(wishArrow);
+
+            // Ground contact indicator
+            const groundGeometry = new THREE.CylinderGeometry(15, 15, 2, 16);
+            const groundMaterial = new THREE.MeshPhongMaterial({
+                color: 0xf44336,
+                transparent: true,
+                opacity: 0.7
+            });
+            groundIndicator = new THREE.Mesh(groundGeometry, groundMaterial);
+            scene.add(groundIndicator);
+        }
+
+        function createArrow(color, name) {
+            const group = new THREE.Group();
+            group.name = name;
+
+            // Arrow shaft
+            const shaftGeometry = new THREE.CylinderGeometry(1, 1, 50, 8);
+            const shaftMaterial = new THREE.MeshPhongMaterial({ color: color });
+            const shaft = new THREE.Mesh(shaftGeometry, shaftMaterial);
+            shaft.rotation.z = -Math.PI / 2;
+            shaft.position.x = 25;
+            group.add(shaft);
+
+            // Arrow head
+            const headGeometry = new THREE.ConeGeometry(4, 10, 8);
+            const headMaterial = new THREE.MeshPhongMaterial({ color: color });
+            const head = new THREE.Mesh(headGeometry, headMaterial);
+            head.rotation.z = -Math.PI / 2;
+            head.position.x = 55;
+            group.add(head);
+
+            return group;
+        }
+
+        function updateVisualization() {
+            if (!currentFrames || currentFrames.length === 0 || !currentFrames[currentFrame]) return;
+
+            const frame = currentFrames[currentFrame];
+
+            // Update player position
+            playerSphere.position.set(frame.x, frame.z, frame.y);
+
+            // Update velocity vector
+            if (currentFrame > 0) {
+                const prevFrame = currentFrames[currentFrame - 1];
+                const dt = 1.0 / 125.0;
+                const velX = (frame.x - prevFrame.x) / dt;
+                const velY = (frame.y - prevFrame.y) / dt;
+
+                const horizontalSpeed = Math.sqrt(velX * velX + velY * velY);
+                
+                if (horizontalSpeed > 10) {
+                    velocityArrow.position.copy(playerSphere.position);
+                    const velocityAngle = Math.atan2(velY, velX);
+                    velocityArrow.rotation.y = velocityAngle;
+                    velocityArrow.visible = document.getElementById('showVelocity').checked;
+                } else {
+                    velocityArrow.visible = false;
+                }
+            }
+
+            // Update yaw direction arrow
+            const yawRad = frame.yawDeg * Math.PI / 180;
+            yawArrow.position.copy(playerSphere.position);
+            yawArrow.rotation.y = yawRad;
+            yawArrow.visible = document.getElementById('showYaw').checked;
+
+            // Update wish direction
+            if (currentFrame > 0) {
+                const prevFrame = currentFrames[currentFrame - 1];
+                const dt = 1.0 / 125.0;
+                const velX = (frame.x - prevFrame.x) / dt;
+                const velY = (frame.y - prevFrame.y) / dt;
+                const horizontalSpeed = Math.sqrt(velX * velX + velY * velY);
+
+                if (horizontalSpeed > 10) {
+                    const velocityAngle = Math.atan2(velY, velX);
+                    const optimalStrafeAngle = velocityAngle + (Math.PI / 6);
+                    
+                    wishArrow.position.copy(playerSphere.position);
+                    wishArrow.rotation.y = optimalStrafeAngle;
+                    wishArrow.visible = document.getElementById('showWish').checked;
+                } else {
+                    wishArrow.position.copy(playerSphere.position);
+                    wishArrow.rotation.y = yawRad + Math.PI / 4;
+                    wishArrow.visible = document.getElementById('showWish').checked;
+                }
+            } else {
+                wishArrow.position.copy(playerSphere.position);
+                wishArrow.rotation.y = yawRad + Math.PI / 4;
+                wishArrow.visible = document.getElementById('showWish').checked;
+            }
+
+            // Update ground indicator
+            if (frame.onGround) {
+                groundIndicator.position.set(frame.x, frame.z - 10, frame.y);
+                groundIndicator.visible = document.getElementById('showGround').checked;
+            } else {
+                groundIndicator.visible = false;
+            }
+
+            // Update trail
+            if (document.getElementById('showTrail').checked) {
+                updateTrail(frame);
+            }
+
+            // Update info panel
+            updateInfoPanel(frame);
+        }
+
+        function updateTrail(frame) {
+            if (trailPoints.length > 50) {
+                const oldPoint = trailPoints.shift();
+                scene.remove(oldPoint);
+            }
+
+            const trailGeometry = new THREE.SphereGeometry(2, 8, 8);
+            const trailMaterial = new THREE.MeshBasicMaterial({
+                color: 0x4fc3f7,
+                transparent: true,
+                opacity: 0.3
+            });
+            const trailPoint = new THREE.Mesh(trailGeometry, trailMaterial);
+            trailPoint.position.set(frame.x, frame.z, frame.y);
+
+            trailPoints.push(trailPoint);
+            scene.add(trailPoint);
+
+            trailPoints.forEach((point, index) => {
+                point.material.opacity = (index / trailPoints.length) * 0.3;
+            });
+        }
+
+        function updatePath() {
+            if (!currentFrames || currentFrames.length === 0) return;
+
+            const points = [];
+            currentFrames.forEach(frame => {
+                points.push(new THREE.Vector3(frame.x, frame.z, frame.y));
+            });
+
+            pathGeometry.setFromPoints(points);
+            pathLine.visible = document.getElementById('showPath').checked;
+        }
+
+        function updateInfoPanel(frame) {
+            document.getElementById('infoFrame').textContent = frame.frame;
+            document.getElementById('infoSpeed').textContent = `${frame.speed.toFixed(1)} ups`;
+            document.getElementById('infoPosition').textContent = `${frame.x.toFixed(1)}, ${frame.y.toFixed(1)}, ${frame.z.toFixed(1)}`;
+            document.getElementById('infoYaw').textContent = `${frame.yawDeg.toFixed(1)}°`;
+            document.getElementById('infoGround').textContent = frame.onGround ? 'Yes' : 'No';
+            document.getElementById('infoHeight').textContent = frame.z.toFixed(1);
+        }
+
+        function setCurrentFrame(frameIndex) {
+            if (!currentFrames || currentFrames.length === 0) return;
+
+            frameIndex = Math.max(0, Math.min(frameIndex, currentFrames.length - 1));
+            currentFrame = frameIndex;
+
+            document.getElementById('frameSlider').value = frameIndex;
+            document.getElementById('frameDisplay').textContent = `${frameIndex} / ${currentFrames.length - 1}`;
+
+            updateVisualization();
+        }
+
+        function setupControlListeners() {
+            // Frame slider
+            document.getElementById('frameSlider').addEventListener('input', (e) => {
+                setCurrentFrame(parseInt(e.target.value));
+            });
+
+            // Playback controls
+            document.getElementById('btnFirst').addEventListener('click', () => setCurrentFrame(0));
+            document.getElementById('btnPrev').addEventListener('click', () => setCurrentFrame(currentFrame - 1));
+            document.getElementById('btnPlay').addEventListener('click', togglePlayback);
+            document.getElementById('btnNext').addEventListener('click', () => setCurrentFrame(currentFrame + 1));
+            document.getElementById('btnLast').addEventListener('click', () => setCurrentFrame(currentFrames.length - 1));
+
+            // Visibility toggles
+            ['showPath', 'showVelocity', 'showYaw', 'showWish', 'showGround', 'showTrail'].forEach(id => {
+                document.getElementById(id).addEventListener('change', updateVisualization);
+            });
+
+            // Camera controls
+            document.getElementById('resetCamera').addEventListener('click', resetCamera);
+            document.getElementById('topView').addEventListener('click', () => setCameraView('top'));
+            document.getElementById('sideView').addEventListener('click', () => setCameraView('side'));
+
+            // Keyboard shortcuts
+            document.addEventListener('keydown', handleKeyPress);
+        }
+
+        function togglePlayback() {
+            if (isPlaying) {
+                stopPlayback();
+            } else {
+                startPlayback();
+            }
+        }
+
+        function startPlayback() {
+            if (isPlaying || !currentFrames || currentFrames.length === 0) return;
+
+            isPlaying = true;
+            document.getElementById('btnPlay').textContent = '⏸||';
+
+            const speed = parseFloat(document.getElementById('playbackSpeed').value);
+            const interval = Math.max(16, 1000 / (125 * speed));
+
+            playbackInterval = setInterval(() => {
+                if (currentFrame >= currentFrames.length - 1) {
+                    stopPlayback();
+                    return;
+                }
+                setCurrentFrame(currentFrame + 1);
+            }, interval);
+        }
+
+        function stopPlayback() {
+            isPlaying = false;
+            document.getElementById('btnPlay').textContent = '▶|';
+
+            if (playbackInterval) {
+                clearInterval(playbackInterval);
+                playbackInterval = null;
+            }
+        }
+
+        function resetCamera() {
+            camera.position.set(500, 500, 500);
+            camera.lookAt(0, 0, 0);
+            controls.target.set(0, 0, 0);
+            controls.update();
+        }
+
+        function setCameraView(view) {
+            if (!currentFrames || currentFrames.length === 0) return;
+
+            const frame = currentFrames[currentFrame];
+            const target = new THREE.Vector3(frame.x, frame.z, frame.y);
+
+            switch (view) {
+                case 'top':
+                    camera.position.set(frame.x, frame.z + 800, frame.y);
+                    break;
+                case 'side':
+                    camera.position.set(frame.x + 500, frame.z + 200, frame.y);
+                    break;
+            }
+
+            controls.target.copy(target);
+            controls.update();
+        }
+
+        function handleKeyPress(e) {
+            if (!currentFrames || currentFrames.length === 0) return;
+
+            switch (e.key) {
+                case 'ArrowLeft':
+                    e.preventDefault();
+                    setCurrentFrame(currentFrame - 1);
+                    break;
+                case 'ArrowRight':
+                    e.preventDefault();
+                    setCurrentFrame(currentFrame + 1);
+                    break;
+                case ' ':
+                    e.preventDefault();
+                    togglePlayback();
+                    break;
+                case 'Home':
+                    e.preventDefault();
+                    setCurrentFrame(0);
+                    break;
+                case 'End':
+                    e.preventDefault();
+                    setCurrentFrame(currentFrames.length - 1);
+                    break;
+                case 'r':
+                    resetCamera();
+                    break;
+            }
+        }
+
+        function onWindowResize() {
+            camera.aspect = window.innerWidth / window.innerHeight;
+            camera.updateProjectionMatrix();
+            renderer.setSize(window.innerWidth, window.innerHeight);
+        }
+
+        function animate() {
+            requestAnimationFrame(animate);
+            controls.update();
+            renderer.render(scene, camera);
+        }
+
+        // Load demo data from localStorage
+        function loadDemoData() {
+            const storedData = localStorage.getItem('q3DemoData');
+            if (storedData) {
+                try {
+                    currentFrames = JSON.parse(storedData);
+                    initializeViewer();
+                } catch (error) {
+                    console.error('Error parsing stored data:', error);
+                    showError('Error loading demo data');
+                }
+            } else {
+                showError('No demo data found. Please load a demo from the main viewer first.');
+            }
+        }
+
+        function initializeViewer() {
+            if (currentFrames && currentFrames.length > 0) {
+                document.getElementById('frameSlider').max = currentFrames.length - 1;
+                updatePath();
+                setCurrentFrame(0);
+
+                const bounds = calculateBounds();
+                const center = bounds.center;
+                const size = bounds.size;
+
+                camera.position.set(
+                    center.x + size * 0.8,
+                    center.y + size * 0.6,
+                    center.z + size * 0.8
+                );
+                controls.target.copy(center);
+                controls.update();
+            }
+        }
+
+        function calculateBounds() {
+            const box = new THREE.Box3();
+            currentFrames.forEach(frame => {
+                box.expandByPoint(new THREE.Vector3(frame.x, frame.z, frame.y));
+            });
+
+            const center = box.getCenter(new THREE.Vector3());
+            const size = box.getSize(new THREE.Vector3()).length();
+
+            return { center, size };
+        }
+
+        function showError(message) {
+            const container = document.getElementById('threejs-container');
+            container.innerHTML = `
+                <div style="display: flex; align-items: center; justify-content: center; height: 100vh; flex-direction: column;">
+                    <h2 style="color: #f44336;">⚠️ Error</h2>
+                    <p style="color: #fff; text-align: center; max-width: 500px;">${message}</p>
+                    <button onclick="window.history.back()" style="margin-top: 20px;">← Back to Charts</button>
+                </div>
+            `;
+        }
+
+        // Make functions globally accessible
+        window.setCurrentFrame = setCurrentFrame;
+        window.togglePlayback = togglePlayback;
+        window.startPlayback = startPlayback;
+        window.stopPlayback = stopPlayback;
+        window.resetCamera = resetCamera;
+        window.setCameraView = setCameraView;
+
+        // Initialize everything when page loads
+        window.addEventListener('load', () => {
+            initThreeJS();
+            loadDemoData();
+        });
+    </script>
+</body>
+</html>

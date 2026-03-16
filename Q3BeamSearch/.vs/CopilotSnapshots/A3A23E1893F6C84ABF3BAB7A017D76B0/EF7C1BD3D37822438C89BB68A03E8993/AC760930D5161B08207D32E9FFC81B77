@@ -1,0 +1,528 @@
+﻿// Program.cs
+// Quake 3 – 125 FPS Movement (flat ground) + Beam-Search Optimizer
+// Defrag (oDFe) VQ3-like movement tuning
+// -----------------------------------------------------------------------------
+// Notes
+// - Physics: friction, ground/air accelerate, gravity, jump impulse.
+// - Flat ground only (z=0). No ramps/steps/clip sliding.
+// - Deterministic at 125 FPS (dt = 1/125).
+// - Beam-search explores key combos + small yaw turns to maximize X distance.
+// - Uses Q3 PM_CmdScale and air wishspeed cap behavior similar to Defrag VQ3.
+
+using System;
+using System.Collections.Generic;
+using System.Linq;
+using System.IO;
+
+namespace Q3BeamSearch
+{
+    // ---------------------- Math helpers ----------------------
+    public struct Vec3
+    {
+        public double X, Y, Z;
+        public Vec3(double x, double y, double z) { X = x; Y = y; Z = z; }
+        public Vec3 Clone() => new Vec3(X, Y, Z);
+        public double Len() => Math.Sqrt(X * X + Y * Y + Z * Z);
+        public void Normalize()
+        {
+            var l = Len();
+            if (l <= 0)
+                return;
+            X /= l;
+            Y /= l;
+            Z /= l;
+        }
+        public double Dot(in Vec3 v) => X * v.X + Y * v.Y + Z * v.Z;
+        public static Vec3 operator +(Vec3 a, Vec3 b) => new Vec3(a.X + b.X, a.Y + b.Y, a.Z + b.Z);
+        public static Vec3 operator -(Vec3 a, Vec3 b) => new Vec3(a.X - b.X, a.Y - b.Y, a.Z - b.Z);
+        public static Vec3 operator *(Vec3 a, double s) => new Vec3(a.X * s, a.Y * s, a.Z * s);
+        public static Vec3 operator /(Vec3 a, double s) => new Vec3(a.X / s, a.Y / s, a.Z / s);
+    }
+
+    // ---------------------- Constants (Defrag VQ3-like defaults) ----------------------
+    public static class Q3
+    {
+        public const double PM_STOPSPEED = 100.0;
+        public const double PM_ACCELERATE = 10.0;
+        public const double PM_AIRACCELERATE = 1.0;
+        public const double PM_FRICTION = 6.0;
+        public const double SV_GRAVITY = 800.0;     // g_gravity
+        public const double SV_MAXSPEED = 320.0;    // ps->speed
+        public const double JUMP_VELOCITY = 270.0;  // upward impulse
+        public const double AIR_WISHSPEED_CAP = 30.0; // Q3 AirAccelerate cap
+
+        public const int FPS = 125;
+        public const double DT = 1.0 / FPS;
+        public const double DEG = Math.PI / 180.0;
+    }
+
+    // ---------------------- Input model ----------------------
+    public struct Input
+    {
+        public sbyte Fwd;      // -1,0,1 (maps to cmd.forwardmove = +/-127)
+        public sbyte Str;      // -1,0,1 (maps to cmd.rightmove = +/-127)
+        public byte Jump;      // 0,1 (press jump)
+        public double YawDeltaDeg;
+    }
+
+    // ---------------------- Player state ----------------------
+    public class PlayerState
+    {
+        public Vec3 Pos = new Vec3(0, 0, 0);
+        public Vec3 Vel = new Vec3(0, 0, 0);
+        public double YawDeg = 0;  // heading around Z
+        public bool OnGround = true;
+
+        public PlayerState Clone() => new PlayerState
+        {
+            Pos = Pos.Clone(),
+            Vel = Vel.Clone(),
+            YawDeg = YawDeg,
+            OnGround = OnGround
+        };
+    }
+
+    // ---------------------- Core physics (flat ground) ----------------------
+    public static class Physics
+    {
+        // PM_CmdScale + wishvel per classic Q3, with optional air wishspeed cap
+        public static (Vec3 wishDir, double wishSpeed) CmdWishDir(PlayerState ps, Input input, bool useAirCap = false)
+        {
+            // Map digital inputs to Q3 cmd values
+            int fmove = input.Fwd * 127;
+            int smove = input.Str * 127;
+            int umove = 0;
+
+            int max = Math.Max(Math.Abs(fmove), Math.Max(Math.Abs(smove), Math.Abs(umove)));
+            if (max == 0)
+                return (new Vec3(0, 0, 0), 0);
+
+            double total = Math.Sqrt((double)(fmove * fmove + smove * smove + umove * umove));
+            double scale = Q3.SV_MAXSPEED * max / (127.0 * total);
+
+            var yaw = ps.YawDeg * Q3.DEG;
+            double c = Math.Cos(yaw), s = Math.Sin(yaw);
+            var fwd = new Vec3(c, s, 0);
+            var right = new Vec3(-s, c, 0);
+
+            // Build wish velocity in world space
+            var wishVel = (fwd * (fmove * scale)) + (right * (smove * scale));
+
+            // Extract wishdir and wishspeed
+            double wishSpeed = Math.Sqrt(wishVel.X * wishVel.X + wishVel.Y * wishVel.Y);
+            Vec3 wishDir = wishSpeed > 0 ? (wishVel / (wishSpeed == 0 ? 1 : wishSpeed)) : new Vec3(0, 0, 0);
+
+            // Optional air cap (disabled for speed optimization)
+            if (useAirCap && !ps.OnGround && wishSpeed > Q3.AIR_WISHSPEED_CAP)
+                wishSpeed = Q3.AIR_WISHSPEED_CAP;
+
+            return (wishDir, wishSpeed);
+        }
+
+        public static void Friction(PlayerState ps)
+        {
+            if (!ps.OnGround)
+                return;
+            var vel2D = new Vec3(ps.Vel.X, ps.Vel.Y, 0);
+            var speed = Math.Sqrt(vel2D.X * vel2D.X + vel2D.Y * vel2D.Y);
+            if (speed < 1.0)
+            {
+                ps.Vel.X = 0;
+                ps.Vel.Y = 0;
+                return;
+            }
+            var control = Math.Max(speed, Q3.PM_STOPSPEED);
+            var drop = control * Q3.PM_FRICTION * Q3.DT;
+            var newspeed = Math.Max(0, speed - drop);
+            if (newspeed != speed)
+            {
+                var scale = newspeed / speed;
+                ps.Vel.X *= scale;
+                ps.Vel.Y *= scale; // leave Z
+            }
+        }
+
+        public static void Accelerate(PlayerState ps, in Vec3 wishDir, double wishSpeed, double accel)
+        {
+            var currentSpeed = ps.Vel.Dot(wishDir);
+            var addSpeed = wishSpeed - currentSpeed;
+            if (addSpeed <= 0)
+                return;
+            var accelSpeed = accel * Q3.DT * wishSpeed;
+            if (accelSpeed > addSpeed)
+                accelSpeed = addSpeed;
+            ps.Vel = new Vec3(
+                ps.Vel.X + accelSpeed * wishDir.X,
+                ps.Vel.Y + accelSpeed * wishDir.Y,
+                ps.Vel.Z + accelSpeed * wishDir.Z
+            );
+        }
+
+        public static void ApplyGravity(PlayerState ps)
+        {
+            if (!ps.OnGround)
+            {
+                ps.Vel = new Vec3(ps.Vel.X, ps.Vel.Y, ps.Vel.Z - Q3.SV_GRAVITY * Q3.DT);
+            }
+        }
+
+        public static void Integrate(PlayerState ps)
+        {
+            ps.Pos = ps.Pos + (ps.Vel * Q3.DT);
+            if (ps.Pos.Z <= 0)
+            {
+                ps.Pos = new Vec3(ps.Pos.X, ps.Pos.Y, 0);
+                if (ps.Vel.Z < 0)
+                    ps.Vel = new Vec3(ps.Vel.X, ps.Vel.Y, 0);
+                ps.OnGround = true;
+            }
+            else
+            {
+                ps.OnGround = false;
+            }
+        }
+
+        public static void Step(PlayerState ps, in Input input)
+        {
+            // Apply view yaw first
+            ps.YawDeg += input.YawDeltaDeg;
+
+            // Jump (only if grounded at frame start)
+            if (input.Jump == 1 && ps.OnGround)
+            {
+                ps.OnGround = false;
+                ps.Vel = new Vec3(ps.Vel.X, ps.Vel.Y, Q3.JUMP_VELOCITY);
+            }
+
+            // Ground friction pre-accelerate
+            Friction(ps);
+
+            // Build wishdir/speed - NO air cap for speed optimization
+            var (wishDir, wishSpeed) = CmdWishDir(ps, input, useAirCap: false);
+            var accel = ps.OnGround ? Q3.PM_ACCELERATE : Q3.PM_AIRACCELERATE;
+            if (wishSpeed > 0)
+                Accelerate(ps, wishDir, wishSpeed, accel);
+
+            // Gravity + integrate
+            ApplyGravity(ps);
+            Integrate(ps);
+        }
+    }
+
+    // ---------------------- Beam search ----------------------
+    public struct PlanInput
+    {
+        public sbyte Fwd, Str; public byte Jump; public double YawDeltaDeg;
+        public override string ToString() => $"fwd={Fwd} str={Str} jump={Jump} yawΔ={YawDeltaDeg}";
+    }
+
+    public class Node
+    {
+        public PlayerState PS = new PlayerState();
+        public List<PlanInput> Plan = new List<PlanInput>();
+        public double Score; // use X distance
+    }
+
+    public static class Search
+    {
+        public class Options
+        {
+            public int Frames = 250;
+            public int BeamWidth = 256; // reduced for speed
+            public double YawStepDeg = 1.0; // coarser steps
+            public int YawSpan = 4; // explore fewer yaw deltas
+            public double SpeedWeight = 2.0; // heavily reward speed
+            public int VelBucket = 10; // coarser velocity buckets
+            public int YawBucket = 5; // coarser yaw buckets
+            public int MaxChildrenPerNode = 20; // limit branching
+            public List<(sbyte fwd, sbyte str, byte jump)> Combos = new()
+            {
+                (1, 0, 0),    // W
+                (1, 1, 0),    // W + D
+                (1, -1, 0),   // W + A
+                (0, 1, 0),    // D only
+                (0, -1, 0),   // A only
+                (1, 0, 1),    // W + Jump
+                (1, 1, 1),    // W + D + Jump
+                (1, -1, 1),   // W + A + Jump
+                (0, 1, 1),    // D + Jump
+                (0, -1, 1),   // A + Jump
+            };
+        }
+
+        public static (Node best, List<Node> history, long expanded) BeamSearchMaxX(PlayerState start, Options opt)
+        {
+            // Build yaw delta set: [-span..+span] * step (including 0)
+            var yawDeltas = new List<double>();
+            for (int k = -opt.YawSpan; k <= opt.YawSpan; k++) yawDeltas.Add(k * opt.YawStepDeg);
+
+            var frontier = new List<Node> { new Node { PS = start.Clone(), Plan = new List<PlanInput>(), Score = 0 } };
+            var snapshots = new List<Node>();
+            long expanded = 0;
+
+            for (int t = 0; t < opt.Frames; t++)
+            {
+                var next = new List<Node>();
+                foreach (var node in frontier)
+                {
+                    // Filter jump combos based on grounded state to reduce branching
+                    IEnumerable<(sbyte fwd, sbyte str, byte jump)> combos = node.PS.OnGround
+                        ? opt.Combos
+                        : opt.Combos.Where(c => c.jump == 0);
+
+                    var children = new List<Node>();
+                    foreach (var c in combos)
+                    {
+                        foreach (var dy in yawDeltas)
+                        {
+                            var input = new Input { Fwd = c.fwd, Str = c.str, Jump = c.jump, YawDeltaDeg = dy };
+                            var ps2 = node.PS.Clone();
+                            Physics.Step(ps2, input);
+
+                            var newPlan = new List<PlanInput>(node.Plan) { new PlanInput { Fwd = c.fwd, Str = c.str, Jump = c.jump, YawDeltaDeg = dy } };
+                            var score = ps2.Pos.X + opt.SpeedWeight * ps2.Vel.Len();
+                            children.Add(new Node { PS = ps2, Plan = newPlan, Score = score });
+                            expanded++;
+                        }
+                    }
+                    
+                    // Keep only top children per node to reduce explosion
+                    children.Sort((a, b) => b.Score.CompareTo(a.Score));
+                    next.AddRange(children.Take(opt.MaxChildrenPerNode));
+                }
+
+                // Dominance pruning: keep only the best per (vel bucket, yaw bucket, onGround)
+                var bestPerBucket = new Dictionary<string, Node>();
+                foreach (var n in next)
+                {
+                    int vxB = (int)Math.Round(n.PS.Vel.X / opt.VelBucket);
+                    int vyB = (int)Math.Round(n.PS.Vel.Y / opt.VelBucket);
+                    int yawB = (int)Math.Round(n.PS.YawDeg / opt.YawBucket);
+                    string key = vxB + "," + vyB + "," + yawB + "," + (n.PS.OnGround ? 1 : 0);
+                    if (!bestPerBucket.TryGetValue(key, out var cur) || n.Score > cur.Score)
+                        bestPerBucket[key] = n;
+                }
+                var pruned = bestPerBucket.Values.ToList();
+
+                // Keep best beamWidth by Score, tie-break by forward velocity
+                pruned.Sort((a, b) =>
+                {
+                    int cmp = b.Score.CompareTo(a.Score);
+                    if (cmp != 0) return cmp;
+                    return b.PS.Vel.X.CompareTo(a.PS.Vel.X);
+                });
+                frontier = pruned.Take(opt.BeamWidth).ToList();
+                if (frontier.Count > 0) snapshots.Add(frontier[0]);
+            }
+
+            frontier.Sort((a, b) => b.Score.CompareTo(a.Score));
+            return (frontier[0], snapshots, expanded);
+        }
+    }
+
+    // ---------------------- Demo / Entry point ----------------------
+    public static class Program
+    {
+        static void Main()
+        {
+            // Faster config for better speeds
+            var opt = new Search.Options
+            {
+                Frames = 500,           // shorter horizon for speed
+                BeamWidth = 128,        // smaller beam
+                YawStepDeg = 2.0,       // coarser yaw steps
+                YawSpan = 3,            // fewer yaw deltas: -6, -4, -2, 0, 2, 4, 6
+                SpeedWeight = 3.0,      // heavily reward velocity
+                VelBucket = 15,         // coarser buckets
+                YawBucket = 10,
+                MaxChildrenPerNode = 15 // limit explosion
+            };
+
+            Console.WriteLine($"[Q3BeamSearch] Starting FAST search (no air cap): frames={opt.Frames}, beamWidth={opt.BeamWidth}, speedWeight={opt.SpeedWeight}");
+            var start = new PlayerState();
+            var (best, history, expanded) = Search.BeamSearchMaxX(start, opt);
+
+            // Evaluate best plan for detailed stats
+            var stats = EvaluatePlan(start, best.Plan);
+
+            Console.WriteLine("[Q3BeamSearch] Search complete");
+            Console.WriteLine($"  Expanded nodes: {expanded:N0}");
+            Console.WriteLine($"  Best distance X: {best.PS.Pos.X:F3}u");
+            Console.WriteLine($"  Final speed: {best.PS.Vel.Len():F3} u/s  | Max speed: {stats.maxSpeed:F3} u/s");
+            Console.WriteLine($"  Jumps: {stats.jumps}, Ground frames: {stats.groundFrames}, Air frames: {stats.airFrames}");
+            Console.WriteLine($"  Yaw: final={best.PS.YawDeg:F2}°, avgΔ/frame={stats.avgYawDelta:F3}°, leftTurns={stats.leftTurns}, rightTurns={stats.rightTurns}");
+
+            var outFile = "movement.cfg";
+            ExportToQ3Cfg(best.Plan, outFile);
+            Console.WriteLine($"[Q3BeamSearch] Exported optimized config -> {outFile}");
+        }
+
+        private static (double finalX, double maxSpeed, int jumps, int groundFrames, int airFrames, double avgYawDelta, int leftTurns, int rightTurns) EvaluatePlan(PlayerState start, List<PlanInput> plan)
+        {
+            var ps = start.Clone();
+            double maxSpeed = 0;
+            int jumps = 0, ground = 0, air = 0, left = 0, right = 0;
+            double yawSum = 0;
+            foreach (var p in plan)
+            {
+                if (p.YawDeltaDeg > 0) left++;
+                else if (p.YawDeltaDeg < 0) right++;
+                yawSum += Math.Abs(p.YawDeltaDeg);
+
+                var beforeGround = ps.OnGround;
+                Physics.Step(ps, new Input { Fwd = p.Fwd, Str = p.Str, Jump = p.Jump, YawDeltaDeg = p.YawDeltaDeg });
+                if (p.Jump == 1 && beforeGround) jumps++;
+                var sp = ps.Vel.Len();
+                if (sp > maxSpeed) maxSpeed = sp;
+                if (ps.OnGround) ground++; else air++;
+            }
+            double avgYaw = plan.Count > 0 ? yawSum / plan.Count : 0;
+            return (ps.Pos.X, maxSpeed, jumps, ground, air, avgYaw, left, right);
+        }
+
+        // Export plan to Quake 3 cfg with compressed waits and semicolon-separated commands
+        static void ExportToQ3Cfg(List<PlanInput> plan, string filename)
+        {
+            using var writer = new StreamWriter(filename);
+
+            writer.WriteLine("// Auto-generated by Q3BeamSearch (compressed)");
+            writer.WriteLine("// Uses 'wait N' (note: 'wait 2' == 1 in-game frame) and holds keys across frames. Commands separated by semicolons.");
+            writer.WriteLine($"// FPS {Q3.FPS}, frames {plan.Count}");
+            writer.WriteLine();
+
+            // Helper to write a single semicolon-joined command line
+            void WriteCmds(List<string> cmds)
+            {
+                if (cmds.Count == 0) return;
+                writer.WriteLine(string.Join(";", cmds));
+                cmds.Clear();
+            }
+
+            // Track current held states
+            int heldFwd = 0;   // -1 back, 0 none, 1 forward
+            int heldStr = 0;   // -1 left, 0 none, 1 right
+            int turnDir = 0;   // -1 right, 0 none, 1 left
+            double yawspeed = 0; // deg/sec
+
+            void SetFwd(int dir, List<string> cmds)
+            {
+                if (heldFwd == dir) return;
+                if (heldFwd == 1) cmds.Add("-forward");
+                else if (heldFwd == -1) cmds.Add("-back");
+                if (dir == 1) cmds.Add("+forward");
+                else if (dir == -1) cmds.Add("+back");
+                heldFwd = dir;
+            }
+            void SetStr(int dir, List<string> cmds)
+            {
+                if (heldStr == dir) return;
+                if (heldStr == 1) cmds.Add("-moveright");
+                else if (heldStr == -1) cmds.Add("-moveleft");
+                if (dir == 1) cmds.Add("+moveright");
+                else if (dir == -1) cmds.Add("+moveleft");
+                heldStr = dir;
+            }
+            void SetTurn(int dir, double speedDegPerSec, List<string> cmds)
+            {
+                if (dir != 0)
+                {
+                    if (Math.Abs(speedDegPerSec - yawspeed) > 1e-6)
+                    {
+                        cmds.Add($"seta cl_yawspeed {speedDegPerSec:0.###}");
+                        yawspeed = speedDegPerSec;
+                    }
+                }
+                if (turnDir == dir) return;
+                if (turnDir == 1) cmds.Add("-left");
+                else if (turnDir == -1) cmds.Add("-right");
+                if (dir == 1) cmds.Add("+left");
+                else if (dir == -1) cmds.Add("+right");
+                turnDir = dir;
+            }
+
+            int i = 0;
+            while (i < plan.Count)
+            {
+                var cmds = new List<string>();
+
+                // Handle jump as a one-frame pulse regardless of runs
+                if (plan[i].Jump == 1)
+                {
+                    int df = Math.Sign(plan[i].Fwd);
+                    int ds = Math.Sign(plan[i].Str);
+                    int dturn = plan[i].YawDeltaDeg > 0 ? 1 : (plan[i].YawDeltaDeg < 0 ? -1 : 0);
+                    double dyaws = Math.Abs(plan[i].YawDeltaDeg) * Q3.FPS;
+                    SetFwd(df, cmds);
+                    SetStr(ds, cmds);
+                    SetTurn(dturn, dyaws, cmds);
+
+                    cmds.Add("+moveup");
+                    cmds.Add("wait 2"); // 'wait 2' == 1 in-game frame
+                    cmds.Add("-moveup");
+                    WriteCmds(cmds);
+                    i += 1;
+                    continue;
+                }
+
+                // Build a run of identical control (excluding jump)
+                int runStart = i;
+                int df0 = Math.Sign(plan[i].Fwd);
+                int ds0 = Math.Sign(plan[i].Str);
+                int dturn0 = plan[i].YawDeltaDeg > 0 ? 1 : (plan[i].YawDeltaDeg < 0 ? -1 : 0);
+                double dyaws0 = Math.Abs(plan[i].YawDeltaDeg) * Q3.FPS;
+
+                int j = i;
+                while (j < plan.Count && plan[j].Jump == 0)
+                {
+                    int df = Math.Sign(plan[j].Fwd);
+                    int ds = Math.Sign(plan[j].Str);
+                    int dturn = plan[j].YawDeltaDeg > 0 ? 1 : (plan[j].YawDeltaDeg < 0 ? -1 : 0);
+                    double dyaws = Math.Abs(plan[j].YawDeltaDeg) * Q3.FPS;
+                    if (df != df0 || ds != ds0 || dturn != dturn0 || Math.Abs(dyaws - dyaws0) > 1e-6)
+                        break;
+                    j++;
+                }
+                int runLen = j - runStart;
+
+                SetFwd(df0, cmds);
+                SetStr(ds0, cmds);
+                SetTurn(dturn0, dyaws0, cmds);
+                cmds.Add($"wait {runLen * 2}"); // 'wait 2' == 1 in-game frame
+                WriteCmds(cmds);
+
+                i = j;
+            }
+
+            // Release held keys in one line
+            var tail = new List<string>();
+            if (turnDir == 1) tail.Add("-left");
+            else if (turnDir == -1) tail.Add("-right");
+            if (heldFwd == 1) tail.Add("-forward");
+            else if (heldFwd == -1) tail.Add("-back");
+            if (heldStr == 1) tail.Add("-moveright");
+            else if (heldStr == -1) tail.Add("-moveleft");
+            tail.Add("-attack");
+            tail.Add("-moveup");
+            tail.Add("-lookup");
+            tail.Add("-lookdown");
+            WriteCmds(tail);
+        }
+    }
+}
+
+/*
+How to run
+----------
+1) Create a folder and open a terminal in it.
+2) dotnet new console -n Q3BeamSearch
+3) Replace the generated Program.cs with this file's contents (inside the Q3BeamSearch project).
+4) dotnet run --project Q3BeamSearch
+
+Knobs to tweak
+--------------
+- Search.Options.Frames       : how many frames to optimize.
+- Search.Options.BeamWidth    : survivors per generation (exploration vs speed).
+- Search.Options.YawStepDeg   : per-frame mouse-turn step.
+- Search.Options.Combos       : movement key combos to allow.
+- Q3 constants (accelerate, friction, gravity, etc.) to mirror desired rulesets.
+*/

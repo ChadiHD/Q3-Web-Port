@@ -1,0 +1,232 @@
+﻿<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Q3 Movement Demo Viewer</title>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <style>
+        body { font-family: Arial, sans-serif; margin: 20px; background: #1a1a1a; color: #fff; }
+        .container { max-width: 1200px; margin: 0 auto; }
+        .controls { background: #2a2a2a; padding: 20px; border-radius: 8px; margin-bottom: 20px; }
+        .stats { background: #2a2a2a; padding: 15px; border-radius: 8px; margin-bottom: 20px; }
+        .charts { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; }
+        .chart-container { background: #2a2a2a; padding: 15px; border-radius: 8px; }
+        select, button { padding: 8px 12px; margin: 5px; background: #3a3a3a; color: #fff; border: 1px solid #555; border-radius: 4px; }
+        button:hover { background: #4a4a4a; cursor: pointer; }
+        .info { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 10px; }
+        .info-item { background: #3a3a3a; padding: 10px; border-radius: 4px; }
+        .status { padding: 5px 10px; border-radius: 4px; }
+        .ok { background: #2d5a2d; }
+        .error { background: #5a2d2d; }
+        .loading { background: #5a5a2d; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>Q3 Movement Demo Viewer</h1>
+        
+        <div class="controls">
+            <h3>Demo Selection</h3>
+            <select id="demoList">
+                <option value="">Select a demo...</option>
+            </select>
+            <button id="btnLoad">Load Demo</button>
+            <button id="btnRefresh">Refresh List</button>
+            <span id="status" class="status">Ready</span>
+        </div>
+
+        <div id="statsContainer" class="stats" style="display: none;">
+            <h3>Demo Statistics</h3>
+            <div id="statsContent" class="info"></div>
+        </div>
+
+        <div class="charts">
+            <div class="chart-container">
+                <h3>Speed Over Time</h3>
+                <canvas id="speedChart" width="400" height="200"></canvas>
+            </div>
+            <div class="chart-container">
+                <h3>Movement Path (2D)</h3>
+                <canvas id="pathChart" width="400" height="200"></canvas>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        // Chart setup
+        const speedChart = new Chart(document.getElementById('speedChart'), {
+            type: 'line',
+            data: {
+                labels: [],
+                datasets: [{
+                    label: 'Speed (ups)',
+                    data: [],
+                    borderColor: '#4fc3f7',
+                    backgroundColor: 'rgba(79, 195, 247, 0.1)',
+                    fill: true,
+                    tension: 0.2
+                }]
+            },
+            options: {
+                responsive: true,
+                maintainAspectRatio: false,
+                scales: {
+                    x: { title: { display: true, text: 'Frame' } },
+                    y: { title: { display: true, text: 'Speed (ups)' } }
+                }
+            }
+        });
+
+        const pathChart = new Chart(document.getElementById('pathChart'), {
+            type: 'scatter',
+            data: {
+                datasets: [{
+                    label: 'Movement Path',
+                    data: [],
+                    borderColor: '#81c784',
+                    backgroundColor: '#81c784',
+                    pointRadius: 1
+                }]
+            },
+            options: {
+                responsive: true,
+                maintainAspectRatio: false,
+                scales: {
+                    x: { title: { display: true, text: 'X Position' } },
+                    y: { title: { display: true, text: 'Y Position' } }
+                }
+            }
+        });
+
+        // Demo management
+        async function loadDemos() {
+            try {
+                setStatus('Loading demos...', 'loading');
+                const response = await fetch('/demos');
+                const demos = await response.json();
+                
+                const select = document.getElementById('demoList');
+                select.innerHTML = '<option value="">Select a demo...</option>';
+                
+                demos.forEach(demo => {
+                    const option = document.createElement('option');
+                    option.value = demo;
+                    option.textContent = demo;
+                    select.appendChild(option);
+                });
+                
+                setStatus(`Found ${demos.length} demos`, 'ok');
+            } catch (error) {
+                setStatus('Error loading demos', 'error');
+                console.error('Error loading demos:', error);
+            }
+        }
+
+        async function loadDemo(fileName) {
+            if (!fileName) return;
+            
+            try {
+                setStatus('Loading demo data...', 'loading');
+                
+                // Load demo frames
+                const response = await fetch(`/demo/${encodeURIComponent(fileName)}`);
+                if (!response.ok) {
+                    throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+                }
+                
+                const frames = await response.json();
+                
+                // Load demo stats
+                const statsResponse = await fetch(`/demo/${encodeURIComponent(fileName)}/stats`);
+                const stats = await statsResponse.json();
+                
+                // Update charts
+                updateCharts(frames);
+                
+                // Update stats display
+                updateStats(stats);
+                
+                setStatus(`Loaded ${frames.length} frames`, 'ok');
+                
+            } catch (error) {
+                setStatus('Error loading demo', 'error');
+                console.error('Error loading demo:', error);
+            }
+        }
+
+        function updateCharts(frames) {
+            // Clear existing data
+            speedChart.data.labels = [];
+            speedChart.data.datasets[0].data = [];
+            pathChart.data.datasets[0].data = [];
+
+            // Add new data
+            frames.forEach(frame => {
+                speedChart.data.labels.push(frame.frame);
+                speedChart.data.datasets[0].data.push(frame.speed);
+                pathChart.data.datasets[0].data.push({ x: frame.x, y: frame.y });
+            });
+
+            // Update charts
+            speedChart.update();
+            pathChart.update();
+        }
+
+        function updateStats(stats) {
+            const container = document.getElementById('statsContent');
+            const statsContainer = document.getElementById('statsContainer');
+            
+            if (stats.error) {
+                container.innerHTML = `<div class="info-item">Error: ${stats.error}</div>`;
+            } else {
+                container.innerHTML = `
+                    <div class="info-item">
+                        <strong>Total Frames:</strong><br>${stats.totalFrames}
+                    </div>
+                    <div class="info-item">
+                        <strong>Duration:</strong><br>${stats.duration}
+                    </div>
+                    <div class="info-item">
+                        <strong>Max Speed:</strong><br>${stats.maxSpeed}
+                    </div>
+                    <div class="info-item">
+                        <strong>Final Speed:</strong><br>${stats.finalSpeed}
+                    </div>
+                    <div class="info-item">
+                        <strong>Distance:</strong><br>${stats.totalDistance}
+                    </div>
+                    <div class="info-item">
+                        <strong>Jumps:</strong><br>${stats.jumps}
+                    </div>
+                `;
+            }
+            
+            statsContainer.style.display = 'block';
+        }
+
+        function setStatus(message, type = '') {
+            const status = document.getElementById('status');
+            status.textContent = message;
+            status.className = `status ${type}`;
+        }
+
+        // Event listeners
+        document.getElementById('btnLoad').addEventListener('click', () => {
+            const fileName = document.getElementById('demoList').value;
+            loadDemo(fileName);
+        });
+
+        document.getElementById('btnRefresh').addEventListener('click', loadDemos);
+
+        document.getElementById('demoList').addEventListener('change', (e) => {
+            if (e.target.value) {
+                loadDemo(e.target.value);
+            }
+        });
+
+        // Load demos on page load
+        loadDemos();
+    </script>
+</body>
+</html>

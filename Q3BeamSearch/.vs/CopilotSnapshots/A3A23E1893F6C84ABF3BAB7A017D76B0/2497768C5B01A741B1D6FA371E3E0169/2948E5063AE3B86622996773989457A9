@@ -1,0 +1,37 @@
+﻿using Microsoft.AspNetCore.Builder;
+using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Hosting;
+using Q3BeamSearch.Web.Hubs;
+using Q3BeamSearch.Web.Services;
+
+namespace Q3BeamSearch
+{
+    public static class WebMain
+    {
+        public static void Main(string[] args)
+        {
+            var builder = WebApplication.CreateBuilder(args);
+
+            builder.Services.AddSignalR();
+            builder.Services.AddHostedService<SimulationWorker>();
+            builder.Services.AddCors(o =>
+            {
+                o.AddDefaultPolicy(p => p
+                    .AllowAnyHeader()
+                    .AllowAnyMethod()
+                    .AllowCredentials()
+                    .SetIsOriginAllowed(_ => true));
+            });
+
+            var app = builder.Build();
+
+            app.UseCors();
+            app.UseDefaultFiles();
+            app.UseStaticFiles();
+
+            app.MapHub<SimulationHub>("/sim");
+
+            app.Run();
+        }
+    }
+}

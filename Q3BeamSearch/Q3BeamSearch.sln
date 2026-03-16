@@ -1,0 +1,39 @@
+﻿
+Microsoft Visual Studio Solution File, Format Version 12.00
+# Visual Studio Version 17
+VisualStudioVersion = 17.14.36327.8
+MinimumVisualStudioVersion = 10.0.40219.1
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Q3BeamSearch.Web", "Q3BeamSearch.Web.csproj", "{3F7D6DF0-73E1-86D7-8815-D8A1A65291AC}"
+	ProjectSection(ProjectDependencies) = postProject
+		{9A1D1C61-6BE6-4C38-A26B-5DD11CD6FC2B} = {9A1D1C61-6BE6-4C38-A26B-5DD11CD6FC2B}
+	EndProjectSection
+EndProject
+Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "Solution Items", "Solution Items", "{8EC462FD-D22E-90A8-E5CE-7E832BA40C5D}"
+	ProjectSection(SolutionItems) = preProject
+		..\..\..\..\Downloads\main.md = ..\..\..\..\Downloads\main.md
+	EndProjectSection
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Q3BeamSearch.Console", "..\Q3BeamSearch.Console\Q3BeamSearch.Console.csproj", "{9A1D1C61-6BE6-4C38-A26B-5DD11CD6FC2B}"
+EndProject
+Global
+	GlobalSection(SolutionConfigurationPlatforms) = preSolution
+		Debug|Any CPU = Debug|Any CPU
+		Release|Any CPU = Release|Any CPU
+	EndGlobalSection
+	GlobalSection(ProjectConfigurationPlatforms) = postSolution
+		{3F7D6DF0-73E1-86D7-8815-D8A1A65291AC}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{3F7D6DF0-73E1-86D7-8815-D8A1A65291AC}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{3F7D6DF0-73E1-86D7-8815-D8A1A65291AC}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{3F7D6DF0-73E1-86D7-8815-D8A1A65291AC}.Release|Any CPU.Build.0 = Release|Any CPU
+		{9A1D1C61-6BE6-4C38-A26B-5DD11CD6FC2B}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{9A1D1C61-6BE6-4C38-A26B-5DD11CD6FC2B}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{9A1D1C61-6BE6-4C38-A26B-5DD11CD6FC2B}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{9A1D1C61-6BE6-4C38-A26B-5DD11CD6FC2B}.Release|Any CPU.Build.0 = Release|Any CPU
+	EndGlobalSection
+	GlobalSection(SolutionProperties) = preSolution
+		HideSolutionNode = FALSE
+	EndGlobalSection
+	GlobalSection(ExtensibilityGlobals) = postSolution
+		SolutionGuid = {89A1E0B1-770C-4ECE-A27E-EA2578982BA4}
+	EndGlobalSection
+EndGlobal
