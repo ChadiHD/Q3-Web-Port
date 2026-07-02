@@ -11,310 +11,33 @@
 //   6. This file replaces viewer3d.js
 
 import * as THREE from 'three';
-import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
-import JSZip from 'jszip';
-import { FrameEditor } from './frame-editor.js';
-import { WaypointSystem } from './waypoint-system.js';
-import { BSPCollisionSystem, PLAYER_PHYSICS_BOUNDS } from './collision-detection.js';
-import { WaypointOptimizer } from './waypoint-optimizer.js';
+import { PLAYER_PHYSICS_BOUNDS } from './collision-detection.js';
+import { bspLoader } from './bsp-loader.js';
+import { slideMove } from './slide-move.js';
+import { V } from './viewer-state.js';
+import { q3YawToThree } from './q3-math.js';
+import { toast, downloadFile } from './ui-utils.js';
+import { initThreeJS } from './scene-setup.js';
+import { renderMap, findFirstSpawn, updateEntityVisibility } from './map-render.js';
 
-// ═══════════════════════════════════════════════════════════════════════
-//  Global state
-// ═══════════════════════════════════════════════════════════════════════
-let scene, camera, renderer, controls, clock;
-let Q3Physics = null;
-let physicsReady = false;
-
-let currentFrames = [];
-let currentFrame = 0;
-let isPlaying = false;
-let playbackInterval = null;
-
-let mapMesh = null;
-let isWireframeMode = false;
-let currentMapData = null;
-let currentBrightness = 1.0;
-
-// Lights
-let ambientLight, directionalLight;
-
-// 3D helpers
-let playerSphere, pathLine, pathGeometry, pathMaterial;
-let velocityArrow, yawArrow, wishArrow, groundIndicator;
-let gridHelper, axesHelper;
-let trailPoints = [];
-
-// Entities
-let spawnObjects = [], triggerObjects = [], itemObjects = [];
-
-// Subsystems
-let collisionSystem = new BSPCollisionSystem();
-let frameEditor = null;
-let waypointSystem = null;
-let optimizer = null;
-let isFrameEditorMode = false;
-let isWaypointMode = false;
-let isScriptEditorOpen = false;
-let isOptimizerOpen = false;
 
 // ═══════════════════════════════════════════════════════════════════════
 //  Q3 WASM initialisation (mandatory — no fallback)
 // ═══════════════════════════════════════════════════════════════════════
 async function initQ3Physics() {
     try {
-        Q3Physics = await Q3PhysicsModule();
-        Q3Physics.ccall('InitPhysics', null, [], []);
-        Q3Physics.ccall('SetPlayerSpeed', null, ['number'], [320]);
-        Q3Physics.ccall('SetGravity', null, ['number'], [800]);
-        physicsReady = true;
+        V.Q3Physics = await Q3PhysicsModule();
+        V.Q3Physics.ccall('InitPhysics', null, [], []);
+        V.Q3Physics.ccall('SetPlayerSpeed', null, ['number'], [320]);
+        V.Q3Physics.ccall('SetGravity', null, ['number'], [800]);
+        V.physicsReady = true;
         console.log('[v2] oDFe WASM physics ready');
     } catch (e) {
-        physicsReady = false;
+        V.physicsReady = false;
         console.error('[v2] oDFe WASM failed to load — viewer will not function', e);
         setUploadStatus('Physics engine failed to load: ' + e.message, 'error');
     }
 }
-
-// ═══════════════════════════════════════════════════════════════════════
-//  BSP loader (same proven parser from v1, cleaned up)
-// ═══════════════════════════════════════════════════════════════════════
-const bspLoader = {
-    async loadMapFromFile(file) {
-        const fn = file.name.toLowerCase();
-        if (fn.endsWith('.pk3')) return this.loadPK3(file);
-        if (fn.endsWith('.bsp')) return this.loadBSP(file);
-        throw new Error('Unsupported format — need .bsp or .pk3');
-    },
-
-    async loadPK3(file) {
-        const zip = await JSZip.loadAsync(file);
-        let bspEntry = null;
-        zip.forEach((path, entry) => {
-            if (!bspEntry && path.toLowerCase().startsWith('maps/') && path.toLowerCase().endsWith('.bsp'))
-                bspEntry = entry;
-        });
-        if (!bspEntry) throw new Error('No .bsp found inside PK3');
-        const buf = await bspEntry.async('arraybuffer');
-        const bsp = this.parseBSP(buf);
-        const textures = await this.loadTexturesFromPK3(zip);
-        return { type: 'pk3', bsp, textures };
-    },
-
-    async loadBSP(file) {
-        const buf = await file.arrayBuffer();
-        return { type: 'bsp', bsp: this.parseBSP(buf), textures: new Map() };
-    },
-
-    async loadTexturesFromPK3(zip) {
-        const textures = new Map();
-        const promises = [];
-        zip.forEach((path, entry) => {
-            if (path.toLowerCase().startsWith('textures/') && /\.(jpg|png|tga)$/i.test(path)) {
-                const name = path.split('/').pop().split('.')[0].toLowerCase();
-                promises.push(entry.async('blob').then(blob => new Promise(res => {
-                    const img = new Image();
-                    img.onload = () => {
-                        const t = new THREE.Texture(img);
-                        t.needsUpdate = true; t.wrapS = t.wrapT = THREE.RepeatWrapping;
-                        textures.set(name, t); res();
-                    };
-                    img.src = URL.createObjectURL(blob);
-                })));
-            }
-        });
-        await Promise.all(promises);
-        return textures;
-    },
-
-    // ── BSP binary parser ──────────────────────────────────────────────
-    parseBSP(buf) {
-        const dv = new DataView(buf);
-        if (dv.getUint32(0, true) !== 0x50534249) throw new Error('Invalid BSP magic');
-        const lumps = [];
-        for (let i = 0; i < 17; i++) lumps.push({ offset: dv.getUint32(8 + i*8, true), length: dv.getUint32(12 + i*8, true) });
-
-        const textures   = this._parseTextures(buf, lumps[1]);
-        const vertices   = this._parseVertices(buf, lumps[10]);
-        const faces      = this._parseFaces(buf, lumps[13]);
-        const meshVerts  = this._parseMeshVerts(buf, lumps[11]);
-        const entities   = this._parseEntities(buf, lumps[0]);
-        const planes     = this._parsePlanes(buf, lumps[2]);
-        const nodes      = this._parseNodes(buf, lumps[3]);
-        const leafs      = this._parseLeafs(buf, lumps[4]);
-        const leafBrushes= this._parseLeafBrushes(buf, lumps[6]);
-        const models     = this._parseModels(buf, lumps[7]);
-        const brushes    = this._parseBrushes(buf, lumps[8], textures);
-        const brushSides = this._parseBrushSides(buf, lumps[9], textures);
-        return { vertices, faces, meshVerts, textures, entities, planes, nodes, leafs, leafBrushes, models, brushes, brushSides, lumps };
-    },
-
-    _parseTextures(buf, l) {
-        const list = [], dv = new DataView(buf, l.offset, l.length), n = l.length / 72;
-        for (let i = 0; i < n; i++) {
-            const o = i * 72;
-            const bytes = new Uint8Array(buf, l.offset + o, 64);
-            let name = ''; for (let j = 0; j < 64 && bytes[j]; j++) name += String.fromCharCode(bytes[j]);
-            list.push({ name, flags: dv.getUint32(o+64,true), contents: dv.getUint32(o+68,true) });
-        }
-        return list;
-    },
-    _parseVertices(buf, l) {
-        const out = [], dv = new DataView(buf, l.offset, l.length), n = l.length / 44;
-        for (let i = 0; i < n; i++) {
-            const o = i * 44;
-            out.push({
-                position: [dv.getFloat32(o,true), dv.getFloat32(o+4,true), dv.getFloat32(o+8,true)],
-                texCoord: [dv.getFloat32(o+12,true), dv.getFloat32(o+16,true)],
-                normal:   [dv.getFloat32(o+28,true), dv.getFloat32(o+32,true), dv.getFloat32(o+36,true)],
-                color:    [dv.getUint8(o+40), dv.getUint8(o+41), dv.getUint8(o+42), dv.getUint8(o+43)]
-            });
-        }
-        return out;
-    },
-    _parseFaces(buf, l) {
-        const out = [], dv = new DataView(buf, l.offset, l.length), n = l.length / 104;
-        for (let i = 0; i < n; i++) {
-            const o = i * 104;
-            out.push({ texture: dv.getInt32(o,true), type: dv.getInt32(o+8,true),
-                vertex: dv.getInt32(o+12,true), numVerts: dv.getInt32(o+16,true),
-                meshVert: dv.getInt32(o+20,true), numMeshVerts: dv.getInt32(o+24,true) });
-        }
-        return out;
-    },
-    _parseMeshVerts(buf, l) {
-        const out = [], dv = new DataView(buf, l.offset, l.length);
-        for (let i = 0; i < l.length / 4; i++) out.push(dv.getInt32(i*4,true));
-        return out;
-    },
-    _parseEntities(buf, l) {
-        if (!l.length) return [];
-        const str = new TextDecoder().decode(new Uint8Array(buf, l.offset, l.length));
-        const entities = []; let cur = null, depth = 0;
-        for (let ln of str.split('\n')) {
-            ln = ln.trim(); if (!ln || ln.startsWith('//')) continue;
-            if (ln === '{' ) { depth++; if (depth === 1) cur = { properties: {} }; }
-            else if (ln === '}') { depth--; if (depth === 0 && cur) { entities.push(cur); cur = null; } }
-            else if (cur && depth === 1) { const m = ln.match(/^"([^"]+)"\s+"([^"]*)"$/); if (m) cur.properties[m[1]] = m[2]; }
-        }
-        return entities;
-    },
-    _parsePlanes(buf, l) {
-        if (!l.length) return [];
-        const out = [], dv = new DataView(buf, l.offset, l.length);
-        for (let i = 0; i < l.length / 16; i++) {
-            const o = i*16;
-            const normal = [dv.getFloat32(o,true), dv.getFloat32(o+4,true), dv.getFloat32(o+8,true)];
-            const dist = dv.getFloat32(o+12,true);
-            const type = (Math.abs(Math.abs(normal[0])-1)<1e-4 && Math.abs(normal[1])<1e-4 && Math.abs(normal[2])<1e-4) ? 0 :
-                         (Math.abs(Math.abs(normal[1])-1)<1e-4 && Math.abs(normal[0])<1e-4 && Math.abs(normal[2])<1e-4) ? 1 :
-                         (Math.abs(Math.abs(normal[2])-1)<1e-4 && Math.abs(normal[0])<1e-4 && Math.abs(normal[1])<1e-4) ? 2 : 3;
-            const signBits = (normal[0]<0?1:0)|(normal[1]<0?2:0)|(normal[2]<0?4:0);
-            out.push({ normal, dist, type, signBits });
-        }
-        return out;
-    },
-    _parseNodes(buf, l) {
-        if (!l.length) return [];
-        const out = [], dv = new DataView(buf, l.offset, l.length);
-        for (let i = 0; i < l.length / 36; i++) {
-            const o = i*36;
-            out.push({ plane: dv.getInt32(o,true), children: [dv.getInt32(o+4,true), dv.getInt32(o+8,true)],
-                mins: [dv.getInt32(o+12,true), dv.getInt32(o+16,true), dv.getInt32(o+20,true)],
-                maxs: [dv.getInt32(o+24,true), dv.getInt32(o+28,true), dv.getInt32(o+32,true)] });
-        }
-        return out;
-    },
-    _parseLeafs(buf, l) {
-        if (!l.length) return [];
-        const out = [], dv = new DataView(buf, l.offset, l.length);
-        for (let i = 0; i < l.length / 48; i++) {
-            const o = i*48;
-            out.push({ cluster: dv.getInt32(o,true), area: dv.getInt32(o+4,true),
-                mins: [dv.getInt32(o+8,true), dv.getInt32(o+12,true), dv.getInt32(o+16,true)],
-                maxs: [dv.getInt32(o+20,true), dv.getInt32(o+24,true), dv.getInt32(o+28,true)],
-                firstLeafSurface: dv.getInt32(o+32,true), numLeafSurfaces: dv.getInt32(o+36,true),
-                firstLeafBrush: dv.getInt32(o+40,true), numLeafBrushes: dv.getInt32(o+44,true) });
-        }
-        return out;
-    },
-    _parseLeafBrushes(buf, l) {
-        if (!l.length) return [];
-        const out = [], dv = new DataView(buf, l.offset, l.length);
-        for (let i = 0; i < l.length/4; i++) out.push(dv.getInt32(i*4,true));
-        return out;
-    },
-    _parseModels(buf, l) {
-        if (!l.length) return [];
-        const out = [], dv = new DataView(buf, l.offset, l.length);
-        for (let i = 0; i < l.length / 40; i++) {
-            const o = i*40;
-            out.push({
-                mins: [dv.getFloat32(o,true), dv.getFloat32(o+4,true), dv.getFloat32(o+8,true)],
-                maxs: [dv.getFloat32(o+12,true), dv.getFloat32(o+16,true), dv.getFloat32(o+20,true)],
-                firstSurface: dv.getInt32(o+24,true), numSurfaces: dv.getInt32(o+28,true),
-                firstBrush: dv.getInt32(o+32,true), numBrushes: dv.getInt32(o+36,true) });
-        }
-        return out;
-    },
-    _parseBrushes(buf, l, textures) {
-        if (!l.length) return [];
-        const out = [], dv = new DataView(buf, l.offset, l.length);
-        for (let i = 0; i < l.length / 12; i++) {
-            const o = i*12, ti = dv.getInt32(o+8,true), sh = textures[ti] || { contents:0, flags:0 };
-            out.push({ firstSide: dv.getInt32(o,true), numSides: dv.getInt32(o+4,true), textureIndex: ti,
-                contents: sh.contents ?? 0, surfaceFlags: sh.flags ?? 0, _lastTraceId: 0 });
-        }
-        return out;
-    },
-    _parseBrushSides(buf, l, textures) {
-        if (!l.length) return [];
-        const out = [], dv = new DataView(buf, l.offset, l.length);
-        for (let i = 0; i < l.length / 8; i++) {
-            const o = i*8, ti = dv.getInt32(o+4,true), sh = textures[ti] || { contents:0, flags:0 };
-            out.push({ planeIndex: dv.getInt32(o,true), textureIndex: ti, surfaceFlags: sh.flags ?? 0, contents: sh.contents ?? 0 });
-        }
-        return out;
-    },
-
-    // ── Geometry builder ───────────────────────────────────────────────
-    createGeometry(mapData) {
-        const geom = new THREE.BufferGeometry();
-        const pos = [], norm = [], uv = [], col = [];
-        for (const face of mapData.bsp.faces) {
-            if (face.type !== 1 && face.type !== 3) continue;
-            for (let i = 0; i < face.numMeshVerts; i += 3) {
-                for (let j = 0; j < 3; j++) {
-                    const mv = face.meshVert + i + j;
-                    if (mv >= mapData.bsp.meshVerts.length) continue;
-                    const v = mapData.bsp.vertices[face.vertex + mapData.bsp.meshVerts[mv]];
-                    if (!v) continue;
-                    // Q3→Three.js: (X, Z, -Y)
-                    pos.push(v.position[0], v.position[2], -v.position[1]);
-                    norm.push(v.normal[0], v.normal[2], -v.normal[1]);
-                    uv.push(...v.texCoord);
-                    col.push(v.color[0]/255, v.color[1]/255, v.color[2]/255);
-                }
-            }
-        }
-        geom.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
-        geom.setAttribute('normal', new THREE.Float32BufferAttribute(norm, 3));
-        geom.setAttribute('uv', new THREE.Float32BufferAttribute(uv, 2));
-        geom.setAttribute('color', new THREE.Float32BufferAttribute(col, 3));
-        geom.computeBoundingBox();
-        return geom;
-    },
-
-    createMaterial(mapData, wireframe = false) {
-        if (mapData.textures?.size > 0) {
-            const first = mapData.textures.values().next().value;
-            return new THREE.MeshLambertMaterial({ map: first, transparent: true, opacity: wireframe ? 0.3 : 0.8, wireframe, side: THREE.DoubleSide });
-        }
-        return new THREE.MeshLambertMaterial({ vertexColors: true, wireframe, transparent: true, opacity: wireframe ? 0.5 : 0.7, side: THREE.DoubleSide });
-    },
-
-    parseOrigin(o) { if (!o) return [0,0,0]; const a = o.split(' ').map(parseFloat); return a.length >= 3 ? a : [0,0,0]; },
-    parseAngle(a) { return a ? parseFloat(a) * Math.PI / 180 : 0; }
-};
 
 // ═══════════════════════════════════════════════════════════════════════
 //  Upload gate
@@ -335,6 +58,33 @@ function setupUploadGate() {
         if (f && (f.name.toLowerCase().endsWith('.bsp') || f.name.toLowerCase().endsWith('.pk3'))) handleMapUpload(f);
         else setUploadStatus('Only .bsp and .pk3 files are supported', 'error');
     });
+
+    // defrag.racing download button
+    document.getElementById('btnLoadDefrag')?.addEventListener('click', () => {
+        let name = document.getElementById('defragMapName')?.value?.trim() ?? '';
+        if (!name) { setUploadStatus('Enter a map filename', 'error'); return; }
+        if (!name.toLowerCase().endsWith('.pk3')) name += '.pk3';
+        loadMapFromDefrag(name);
+    });
+    document.getElementById('defragMapName')?.addEventListener('keydown', e => {
+        if (e.key === 'Enter') document.getElementById('btnLoadDefrag')?.click();
+    });
+}
+
+async function loadMapFromDefrag(filename) {
+    setUploadStatus(`Downloading ${filename}…`);
+    try {
+        const res = await fetch(`/api/map-proxy?mapname=${encodeURIComponent(filename)}`);
+        if (!res.ok) {
+            const msg = await res.text().catch(() => res.statusText);
+            throw new Error(msg || `HTTP ${res.status}`);
+        }
+        const blob = await res.blob();
+        const file = new File([blob], filename, { type: 'application/octet-stream' });
+        await handleMapUpload(file);
+    } catch (err) {
+        setUploadStatus(`Download failed: ${err.message}`, 'error');
+    }
 }
 
 function setUploadStatus(msg, type = '') {
@@ -348,8 +98,8 @@ async function handleMapUpload(file) {
     setUploadStatus('Loading map…');
     try {
         const mapData = await bspLoader.loadMapFromFile(file);
-        currentMapData = mapData;
-        collisionSystem.loadFromBSP(mapData.bsp);
+        V.currentMapData = mapData;
+        V.collisionSystem.loadFromBSP(mapData.bsp);
         setUploadStatus('Map loaded ✓', 'ok');
         setTimeout(() => transitionToViewer(), 400);
     } catch (err) {
@@ -361,225 +111,40 @@ async function handleMapUpload(file) {
 function transitionToViewer() {
     document.getElementById('uploadGate').style.display = 'none';
     document.getElementById('viewerRoot').style.display = '';
-    initThreeJS();
-    renderMap(currentMapData);
-    setupViewerControls();
-    animate();
-}
 
-// ═══════════════════════════════════════════════════════════════════════
-//  Three.js init
-// ═══════════════════════════════════════════════════════════════════════
-function initThreeJS() {
-    scene = new THREE.Scene();
-    scene.background = new THREE.Color(0x111111);
-    scene.fog = new THREE.Fog(0x111111, 2000, 12000);
-
-    camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 1, 20000);
-    renderer = new THREE.WebGLRenderer({ antialias: true });
-    renderer.setSize(window.innerWidth, window.innerHeight);
-    renderer.shadowMap.enabled = true;
-    renderer.outputColorSpace = THREE.SRGBColorSpace;
-    renderer.toneMapping = THREE.ACESFilmicToneMapping;
-    renderer.toneMappingExposure = 1;
-    document.getElementById('threejs-container').appendChild(renderer.domElement);
-
-    controls = new OrbitControls(camera, renderer.domElement);
-    controls.enableDamping = true;
-    controls.dampingFactor = 0.05;
-    controls.minDistance = 10;
-    controls.maxDistance = 8000;
-
-    ambientLight = new THREE.AmbientLight(0x404040, 0.6);
-    scene.add(ambientLight);
-    directionalLight = new THREE.DirectionalLight(0xffffff, 0.8);
-    directionalLight.position.set(1000, 1000, 500);
-    directionalLight.castShadow = true;
-    scene.add(directionalLight);
-
-    gridHelper = new THREE.GridHelper(2000, 50, 0x444444, 0x222222);
-    gridHelper.visible = false;
-    scene.add(gridHelper);
-    axesHelper = new THREE.AxesHelper(200);
-    axesHelper.visible = false;
-    scene.add(axesHelper);
-
-    clock = new THREE.Clock();
-    createPlayerObjects();
-    window.addEventListener('resize', () => {
-        camera.aspect = window.innerWidth / window.innerHeight;
-        camera.updateProjectionMatrix();
-        renderer.setSize(window.innerWidth, window.innerHeight);
-    });
-
-    // Subsystems
-    if (physicsReady) {
-        frameEditor = new FrameEditor(Q3Physics);
-        frameEditor.setCollisionSystem(collisionSystem.isReady() ? collisionSystem : null);
-        optimizer = new WaypointOptimizer(Q3Physics);
+    if (!V.isViewerInitialized) {
+        initThreeJS();
+        setupViewerControls();
+        animate();
+        V.isViewerInitialized = true;
     }
-    waypointSystem = new WaypointSystem(scene, mapMesh);
-}
 
-function createPlayerObjects() {
-    playerSphere = new THREE.Mesh(
-        new THREE.SphereGeometry(8, 16, 16),
-        new THREE.MeshPhongMaterial({ color: 0xff6b6b, emissive: 0x220000, shininess: 80 })
-    );
-    playerSphere.visible = false;
-    scene.add(playerSphere);
+    // Reset per-map state so the previous run's frames/trail don't carry over.
+    stopPlayback();
+    V.currentFrames = [];
+    V.currentFrame = 0;
+    if (V.playerSphere) V.playerSphere.visible = false;
+    V.trailPoints.forEach(p => V.scene.remove(p));
+    V.trailPoints = [];
+    if (V.pathGeometry) V.pathGeometry.setFromPoints([]);
+    if (V.pathLine) V.pathLine.visible = false;
 
-    pathGeometry = new THREE.BufferGeometry();
-    pathMaterial = new THREE.LineBasicMaterial({ color: 0x4fc3f7, transparent: true, opacity: 0.8 });
-    pathLine = new THREE.Line(pathGeometry, pathMaterial);
-    scene.add(pathLine);
+    const slider = document.getElementById('frameSlider');
+    if (slider) { slider.value = 0; slider.max = 0; }
+    const disp = document.getElementById('frameDisplay');
+    if (disp) disp.textContent = '0 / 0';
 
-    velocityArrow = createArrowGroup(0x4caf50); scene.add(velocityArrow);
-    yawArrow = createArrowGroup(0xff9800); scene.add(yawArrow);
-    wishArrow = createArrowGroup(0x9c27b0); scene.add(wishArrow);
-
-    groundIndicator = new THREE.Mesh(
-        new THREE.CylinderGeometry(15, 15, 2, 16),
-        new THREE.MeshPhongMaterial({ color: 0xf44336, transparent: true, opacity: 0.7 })
-    );
-    scene.add(groundIndicator);
-}
-
-function createArrowGroup(color) {
-    const g = new THREE.Group();
-    const shaft = new THREE.Mesh(new THREE.CylinderGeometry(1,1,50,8), new THREE.MeshPhongMaterial({ color }));
-    shaft.rotation.z = -Math.PI/2; shaft.position.x = 25; g.add(shaft);
-    const head = new THREE.Mesh(new THREE.ConeGeometry(4,10,8), new THREE.MeshPhongMaterial({ color }));
-    head.rotation.z = -Math.PI/2; head.position.x = 55; g.add(head);
-    g.visible = false;
-    return g;
-}
-
-// ═══════════════════════════════════════════════════════════════════════
-//  Map rendering + entities
-// ═══════════════════════════════════════════════════════════════════════
-function renderMap(mapData) {
-    if (mapMesh) { scene.remove(mapMesh); mapMesh.geometry.dispose(); mapMesh.material.dispose(); }
-    const geom = bspLoader.createGeometry(mapData);
-    const mat = bspLoader.createMaterial(mapData, isWireframeMode);
-    mapMesh = new THREE.Mesh(geom, mat);
-    mapMesh.name = 'BSP_Map';
-    scene.add(mapMesh);
-    if (waypointSystem) waypointSystem.setMap(mapMesh);
-
-    if (mapData.bsp.entities) createEntityObjects(mapData.bsp.entities);
-
-    // Default camera: top-down on first spawn (criterion 3)
-    const spawn = findFirstSpawn(mapData.bsp.entities);
-    if (spawn) {
-        const o = bspLoader.parseOrigin(spawn.properties.origin);
-        const spawnAngle = spawn.properties.angle ? parseFloat(spawn.properties.angle) : 0;
-        // Q3→Three: (X, Z, -Y)
-        const pos = new THREE.Vector3(o[0], o[2], -o[1]);
-        camera.position.set(pos.x, pos.y + 800, pos.z);
-        camera.lookAt(pos);
-        controls.target.copy(pos);
-
-        // Place playerSphere at spawn (same position as green cone)
-        if (playerSphere) {
-            playerSphere.position.copy(pos);
-            playerSphere.visible = true;
-        }
-
-        // Seed FrameEditor with Q3 spawn origin so physics starts here
-        if (frameEditor) {
-            frameEditor.setSpawnState(o, spawnAngle);
-        }
-    } else {
-        const box = new THREE.Box3().setFromObject(mapMesh);
-        const center = box.getCenter(new THREE.Vector3());
-        const size = box.getSize(new THREE.Vector3());
-        camera.position.set(center.x, center.y + Math.max(size.x, size.z) * 0.9, center.z);
-        camera.lookAt(center);
-        controls.target.copy(center);
-    }
-    controls.update();
-}
-
-function findFirstSpawn(entities) {
-    if (!entities) return null;
-    return entities.find(e => e.properties.classname === 'info_player_deathmatch' || e.properties.classname === 'info_player_start');
-}
-
-function createEntityObjects(entities) {
-    clearEntityObjects();
-    const cats = { players: 0, triggers: 0, items: 0, lights: 0, other: 0 };
-    for (const e of entities) {
-        const c = e.properties.classname || '';
-        const o = bspLoader.parseOrigin(e.properties.origin);
-        const ang = bspLoader.parseAngle(e.properties.angle);
-        const pos = new THREE.Vector3(o[0], o[2], -o[1]);
-
-        if (c.includes('info_player') || c.includes('info_spectator')) {
-            createSpawnPoint(pos, ang, c); cats.players++;
-        } else if (c.startsWith('trigger_')) {
-            createTrigger(pos, e, c); cats.triggers++;
-        } else if (/^item_|^weapon_|^ammo_/.test(c)) {
-            createItem(pos, c); cats.items++;
-        } else if (c.includes('light')) { cats.lights++; }
-        else { cats.other++; }
-    }
-    const el = document.getElementById('entityCount');
-    if (el) el.innerHTML = `Players: ${cats.players} · Triggers: ${cats.triggers} · Items: ${cats.items} · Lights: ${cats.lights}`;
-    updateEntityVisibility();
-}
-
-function createSpawnPoint(pos, angle, classname) {
-    const g = new THREE.Group();
-    const cone = new THREE.Mesh(new THREE.ConeGeometry(12, 24, 8), new THREE.MeshPhongMaterial({ color: classname.includes('deathmatch') ? 0x00ff00 : 0x00aa00, transparent: true, opacity: 0.8 }));
-    cone.position.y = 12; g.add(cone);
-    const arrow = new THREE.Mesh(new THREE.ConeGeometry(6, 20, 8), new THREE.MeshPhongMaterial({ color: 0xffff00 }));
-    arrow.position.set(0, 30, 0);
-    arrow.rotation.z = -Math.PI/2;
-    arrow.rotation.y = q3YawToThree(angle);
-    g.add(arrow);
-    g.position.copy(pos);
-    spawnObjects.push(g); scene.add(g);
-}
-function createTrigger(pos, entity, classname) {
-    const m = new THREE.Mesh(new THREE.BoxGeometry(32,32,32), new THREE.MeshBasicMaterial({ color: 0xffff00, wireframe: true, transparent: true, opacity: 0.5 }));
-    m.position.copy(pos); m.userData = { type: 'trigger', classname, entity };
-    triggerObjects.push(m); scene.add(m);
-}
-function createItem(pos, classname) {
-    let color = 0x00ffff, geo = new THREE.SphereGeometry(8, 12, 12);
-    if (classname.includes('weapon_')) { geo = new THREE.BoxGeometry(16,8,16); color = 0xff8800; }
-    else if (classname.includes('ammo_')) { geo = new THREE.CylinderGeometry(8,8,12,8); color = 0x8800ff; }
-    const m = new THREE.Mesh(geo, new THREE.MeshPhongMaterial({ color, transparent: true, opacity: 0.7 }));
-    m.position.copy(pos); m.userData = { type: 'item', classname };
-    itemObjects.push(m); scene.add(m);
-}
-function clearEntityObjects() {
-    [...spawnObjects, ...triggerObjects, ...itemObjects].forEach(o => scene.remove(o));
-    spawnObjects = []; triggerObjects = []; itemObjects = [];
-}
-function updateEntityVisibility() {
-    const sp = document.getElementById('showSpawns')?.checked ?? true;
-    const tr = document.getElementById('showTriggers')?.checked ?? true;
-    const it = document.getElementById('showItems')?.checked ?? true;
-    spawnObjects.forEach(o => o.visible = sp);
-    triggerObjects.forEach(o => o.visible = tr);
-    itemObjects.forEach(o => o.visible = it);
+    renderMap(V.currentMapData);
 }
 
 // ═══════════════════════════════════════════════════════════════════════
 //  Q3 physics helpers (no fallback — requires WASM)
 // ═══════════════════════════════════════════════════════════════════════
-function q3YawToThree(rad) {
-    if (!isFinite(rad)) return 0;
-    return Math.atan2(-Math.sin(rad), Math.cos(rad));
-}
-
 function computePhysics(frameIndex) {
-    if (!physicsReady || frameIndex < 1 || frameIndex >= currentFrames.length) {
+    if (!V.physicsReady || frameIndex < 1 || frameIndex >= V.currentFrames.length) {
         return { hSpeed: 0, velAngle: 0, wishAngle: 0, efficiency: 0 };
     }
-    const prev = currentFrames[frameIndex - 1], cur = currentFrames[frameIndex];
+    const prev = V.currentFrames[frameIndex - 1], cur = V.currentFrames[frameIndex];
     const dt = 1/125;
     const vx = (cur.x - prev.x) / dt, vy = (cur.y - prev.y) / dt;
     const hSpeed = Math.sqrt(vx*vx + vy*vy);
@@ -595,33 +160,34 @@ function computePhysics(frameIndex) {
 
 // ═══════════════════════════════════════════════════════════════════════
 //  Collision application to loaded frames (criterion 4)
+//  Implements Q3-style slide movement: when hitting a wall, clip the
+//  remaining velocity against the surface normal and continue moving.
 // ═══════════════════════════════════════════════════════════════════════
+
 function applyCollisionsToFrames() {
-    if (!collisionSystem.isReady() || !currentFrames.length) return;
+    if (!V.collisionSystem.isReady() || !V.currentFrames.length) return;
 
     const dt = 1 / 125;
-    let prev = currentFrames[0];
+    let prev = V.currentFrames[0];
 
-    for (let i = 1; i < currentFrames.length; i++) {
-        const fr = currentFrames[i];
+    for (let i = 1; i < V.currentFrames.length; i++) {
+        const fr = V.currentFrames[i];
 
         // Frame convention -> Q3 coords for collision
         const startQ3 = [prev.x, -prev.y, prev.z];
         const endQ3 = [fr.x, -fr.y, fr.z];
 
-        const trace = collisionSystem.traceBox(
-            startQ3,
-            endQ3,
-            PLAYER_PHYSICS_BOUNDS.mins,
-            PLAYER_PHYSICS_BOUNDS.maxs
-        );
+        // Movement vector this frame wants to travel
+        const moveVec = [endQ3[0] - startQ3[0], endQ3[1] - startQ3[1], endQ3[2] - startQ3[2]];
+
+        const result = slideMove(startQ3, moveVec, V.collisionSystem, PLAYER_PHYSICS_BOUNDS);
 
         // Q3 coords -> frame convention
-        fr.x = trace.endPos.x;
-        fr.y = -trace.endPos.y;
-        fr.z = trace.endPos.z;
+        fr.x = result.pos[0];
+        fr.y = -result.pos[1];
+        fr.z = result.pos[2];
 
-        fr.onGround = trace.hit && trace.plane ? (trace.plane.normal[2] > 0.7) : false;
+        fr.onGround = result.hitPlane ? (result.hitPlane[2] > 0.7) : false;
         fr.speed = Math.sqrt(((fr.x - prev.x) / dt) ** 2 + ((fr.y - prev.y) / dt) ** 2 + ((fr.z - prev.z) / dt) ** 2);
 
         prev = fr;
@@ -634,66 +200,66 @@ function applyCollisionsToFrames() {
 //  Visualisation
 // ═══════════════════════════════════════════════════════════════════════
 function updateVisualization() {
-    if (!currentFrames.length) {
+    if (!V.currentFrames.length) {
         // No frames — keep playerSphere at spawn position (don't hide it)
         return;
     }
-    const fr = currentFrames[currentFrame];
+    const fr = V.currentFrames[V.currentFrame];
     if (!fr) return;
-    const phys = computePhysics(currentFrame);
+    const phys = computePhysics(V.currentFrame);
 
-    playerSphere.visible = true;
-    playerSphere.position.set(fr.x, fr.z, fr.y);
+    V.playerSphere.visible = true;
+    V.playerSphere.position.set(fr.x, fr.z, fr.y);
 
     // Velocity arrow
     if (phys.hSpeed > 10 && (document.getElementById('showVelocity')?.checked ?? true)) {
-        velocityArrow.visible = true;
-        velocityArrow.position.copy(playerSphere.position);
-        velocityArrow.rotation.y = q3YawToThree(phys.velAngle);
+        V.velocityArrow.visible = true;
+        V.velocityArrow.position.copy(V.playerSphere.position);
+        V.velocityArrow.rotation.y = q3YawToThree(phys.velAngle);
         const s = Math.min(Math.max(phys.hSpeed / 400, 0.4), 3);
-        velocityArrow.scale.set(s, s, s);
-    } else velocityArrow.visible = false;
+        V.velocityArrow.scale.set(s, s, s);
+    } else V.velocityArrow.visible = false;
 
     // Yaw arrow
     const yawRad = fr.yawDeg * Math.PI / 180;
-    yawArrow.position.copy(playerSphere.position);
-    yawArrow.rotation.y = q3YawToThree(yawRad);
-    yawArrow.visible = document.getElementById('showYaw')?.checked ?? true;
+    V.yawArrow.position.copy(V.playerSphere.position);
+    V.yawArrow.rotation.y = q3YawToThree(yawRad);
+    V.yawArrow.visible = document.getElementById('showYaw')?.checked ?? true;
 
     // Wish arrow
     if (phys.hSpeed > 10 && (document.getElementById('showWish')?.checked ?? true)) {
-        wishArrow.visible = true;
-        wishArrow.position.copy(playerSphere.position);
-        wishArrow.rotation.y = q3YawToThree(phys.wishAngle);
-    } else wishArrow.visible = false;
+        V.wishArrow.visible = true;
+        V.wishArrow.position.copy(V.playerSphere.position);
+        V.wishArrow.rotation.y = q3YawToThree(phys.wishAngle);
+    } else V.wishArrow.visible = false;
 
     // Ground
     if (fr.onGround && (document.getElementById('showGround')?.checked ?? true)) {
-        groundIndicator.position.set(fr.x, fr.z - 10, fr.y);
-        groundIndicator.visible = true;
-    } else groundIndicator.visible = false;
+        V.groundIndicator.position.set(fr.x, fr.z - 10, fr.y);
+        V.groundIndicator.visible = true;
+    } else V.groundIndicator.visible = false;
 
     // Trail
     if (document.getElementById('showTrail')?.checked) updateTrail(fr);
 
     // Waypoint check
-    if (waypointSystem) waypointSystem.checkWaypoint({ x: fr.x, y: fr.y, z: fr.z }, currentFrame);
+    if (V.waypointSystem) V.waypointSystem.checkWaypoint({ x: fr.x, y: fr.y, z: fr.z }, V.currentFrame);
 
     updateInfoPanel(fr, phys);
 }
 
 function updateTrail(fr) {
-    if (trailPoints.length > 60) { const old = trailPoints.shift(); scene.remove(old); }
+    if (V.trailPoints.length > 60) { const old = V.trailPoints.shift(); V.scene.remove(old); }
     const pt = new THREE.Mesh(new THREE.SphereGeometry(2, 8, 8), new THREE.MeshBasicMaterial({ color: 0x4fc3f7, transparent: true, opacity: 0.4 }));
     pt.position.set(fr.x, fr.z, fr.y);
-    trailPoints.push(pt); scene.add(pt);
-    trailPoints.forEach((p, i) => { p.material.opacity = (i / trailPoints.length) * 0.4; });
+    V.trailPoints.push(pt); V.scene.add(pt);
+    V.trailPoints.forEach((p, i) => { p.material.opacity = (i / V.trailPoints.length) * 0.4; });
 }
 
 function updatePath() {
-    if (!currentFrames.length) return;
-    pathGeometry.setFromPoints(currentFrames.map(f => new THREE.Vector3(f.x, f.z, f.y)));
-    pathLine.visible = document.getElementById('showPath')?.checked ?? true;
+    if (!V.currentFrames.length) return;
+    V.pathGeometry.setFromPoints(V.currentFrames.map(f => new THREE.Vector3(f.x, f.z, f.y)));
+    V.pathLine.visible = document.getElementById('showPath')?.checked ?? true;
 }
 
 function updateInfoPanel(fr, phys) {
@@ -711,37 +277,45 @@ function updateInfoPanel(fr, phys) {
 //  Playback
 // ═══════════════════════════════════════════════════════════════════════
 function setCurrentFrame(idx) {
-    if (!currentFrames.length) return;
-    currentFrame = Math.max(0, Math.min(idx, currentFrames.length - 1));
+    if (!V.currentFrames.length) return;
+    V.currentFrame = Math.max(0, Math.min(idx, V.currentFrames.length - 1));
     const slider = document.getElementById('frameSlider');
-    if (slider) slider.value = currentFrame;
+    if (slider) slider.value = V.currentFrame;
     const disp = document.getElementById('frameDisplay');
-    if (disp) disp.textContent = `${currentFrame} / ${currentFrames.length - 1}`;
+    if (disp) disp.textContent = `${V.currentFrame} / ${V.currentFrames.length - 1}`;
     updateVisualization();
 }
 
-function togglePlayback() { isPlaying ? stopPlayback() : startPlayback(); }
+function togglePlayback() { V.isPlaying ? stopPlayback() : startPlayback(); }
 function startPlayback() {
-    if (isPlaying || !currentFrames.length) return;
-    isPlaying = true;
+    if (V.isPlaying || !V.currentFrames.length) return;
+    V.isPlaying = true;
     const btn = document.getElementById('btnPlay'); if (btn) btn.textContent = '⏸';
     const speed = parseFloat(document.getElementById('playbackSpeed')?.value || '1');
-    playbackInterval = setInterval(() => {
-        if (currentFrame >= currentFrames.length - 1) { stopPlayback(); return; }
-        setCurrentFrame(currentFrame + 1);
+    V.playbackInterval = setInterval(() => {
+        if (V.currentFrame >= V.currentFrames.length - 1) { stopPlayback(); return; }
+        setCurrentFrame(V.currentFrame + 1);
     }, Math.max(16, 1000 / (125 * speed)));
 }
 function stopPlayback() {
-    isPlaying = false;
+    V.isPlaying = false;
     const btn = document.getElementById('btnPlay'); if (btn) btn.textContent = '⏯';
-    if (playbackInterval) { clearInterval(playbackInterval); playbackInterval = null; }
+    if (V.playbackInterval) { clearInterval(V.playbackInterval); V.playbackInterval = null; }
 }
 
 // ═══════════════════════════════════════════════════════════════════════
 //  Movement script parser (Q3 cfg format → frames via WASM)
 // ═══════════════════════════════════════════════════════════════════════
 function parseMovementScript(text) {
-    if (!physicsReady) { toast('Physics engine not loaded'); return []; }
+    if (!V.physicsReady) { toast('Physics engine not loaded'); return []; }
+
+    // Reset WASM physics state to clear stale pm_flags (e.g. PMF_JUMP_HELD from a
+    // previous run), otherwise jumping and other state-dependent behaviours break
+    // on second and subsequent script executions.
+    const Q3 = V.Q3Physics;
+    Q3.ccall('InitPhysics', null, [], []);
+    Q3.ccall('SetPlayerSpeed', null, ['number'], [320]);
+    Q3.ccall('SetGravity', null, ['number'], [800]);
 
     const lines = text.split('\n').map(l => l.trim()).filter(l => l && !l.startsWith('//'));
     const frames = [];
@@ -751,9 +325,8 @@ function parseMovementScript(text) {
     let moveup = false, movedown = false;
     let yawSpeed = 140;
 
-    const Q3 = Q3Physics;
     const posPtr = Q3._malloc(12), velPtr = Q3._malloc(12), angPtr = Q3._malloc(12);
-    const spawn = findFirstSpawn(currentMapData?.bsp?.entities);
+    const spawn = findFirstSpawn(V.currentMapData?.bsp?.entities);
     const spawnOrigin = spawn ? bspLoader.parseOrigin(spawn.properties.origin) : [0, 0, 0];
     const spawnAngle = spawn ? parseFloat(spawn.properties.angle || '0') : 0;
 
@@ -825,8 +398,11 @@ function parseMovementScript(text) {
             }
             else if (lower.startsWith('wait')) {
                 const parts = cmd.split(/\s+/);
-                let waitVal = parseInt(parts[1]) || 2;
-                emitFrames(Math.max(1, Math.floor(waitVal / 2)));
+                // In Q3, bare `wait` = 1 game frame; `wait N` = N frames at 125 Hz.
+                // Previously this was halved (/ 2) which caused too few frames and
+                // the player never reaching 320 ups.
+                const waitVal = parseInt(parts[1]) || 1;
+                emitFrames(Math.max(1, waitVal));
             }
         }
     }
@@ -839,9 +415,9 @@ function parseMovementScript(text) {
 //  Load demo / script / JSON data
 // ═══════════════════════════════════════════════════════════════════════
 function loadFrames(frames) {
-    currentFrames = frames;
-    currentFrame = 0;
-    playerSphere.visible = frames.length > 0;
+    V.currentFrames = frames;
+    V.currentFrame = 0;
+    V.playerSphere.visible = frames.length > 0;
     const slider = document.getElementById('frameSlider');
     if (slider) slider.max = Math.max(0, frames.length - 1);
     applyCollisionsToFrames();
@@ -851,10 +427,10 @@ function loadFrames(frames) {
     // Camera to first frame top-down (criterion 3)
     if (frames.length > 0) {
         const f = frames[0];
-        camera.position.set(f.x, f.z + 800, f.y);
-        camera.lookAt(f.x, f.z, f.y);
-        controls.target.set(f.x, f.z, f.y);
-        controls.update();
+        V.camera.position.set(f.x, f.z + 800, f.y);
+        V.camera.lookAt(f.x, f.z, f.y);
+        V.controls.target.set(f.x, f.z, f.y);
+        V.controls.update();
     }
 }
 
@@ -887,8 +463,8 @@ function handleScriptRun() {
 //  Optimizer integration
 // ═══════════════════════════════════════════════════════════════════════
 async function runOptimizer() {
-    if (!optimizer) { toast('Physics engine not available'); return; }
-    if (!waypointSystem || waypointSystem.waypoints.length < 2) { toast('Place at least 2 waypoints'); return; }
+    if (!V.optimizer) { toast('Physics engine not available'); return; }
+    if (!V.waypointSystem || V.waypointSystem.waypoints.length < 2) { toast('Place at least 2 waypoints'); return; }
 
     const algo = document.getElementById('optimizerAlgo')?.value || 'de';
     const maxFrames = parseInt(document.getElementById('optimizerMaxFrames')?.value) || 250;
@@ -902,14 +478,14 @@ async function runOptimizer() {
 
     runBtn.style.display = 'none';
     cancelBtn.style.display = '';
-    cancelBtn.onclick = () => optimizer.cancel();
+    cancelBtn.onclick = () => V.optimizer.cancel();
 
     if (statusEl) statusEl.textContent = 'Running…';
     if (fillEl) fillEl.style.width = '0%';
 
     try {
-        const inputs = await optimizer.optimizeFullRoute(
-            waypointSystem.waypoints,
+        const inputs = await V.optimizer.optimizeFullRoute(
+            V.waypointSystem.waypoints,
             algo,
             { maxFrames, targetJumps, generations: iters, maxEvals: iters * 10 },
             (seg, totalSeg, step, total, score) => {
@@ -923,9 +499,9 @@ async function runOptimizer() {
         if (fillEl) fillEl.style.width = '100%';
 
         // Convert optimizer inputs → frame data via WASM simulation
-        const spawn = findFirstSpawn(currentMapData?.bsp?.entities);
+        const spawn = findFirstSpawn(V.currentMapData?.bsp?.entities);
         const spawnOrigin = spawn ? bspLoader.parseOrigin(spawn.properties.origin) : [0, 0, 0];
-        const result = optimizer.simulateRoute(spawnOrigin, [0,0,0], 0, inputs);
+        const result = V.optimizer.simulateRoute(spawnOrigin, [0,0,0], 0, inputs);
         // Frame convention: x = Q3_X, y = -Q3_Y (Three.js Z), z = Q3_Z (Three.js Y)
         const frames = result.positions.map((p, i) => ({
             frame: i, x: p.x, y: -p.y, z: p.z,
@@ -950,10 +526,10 @@ async function runOptimizer() {
 //  Frame Editor
 // ═══════════════════════════════════════════════════════════════════════
 function toggleFrameEditor() {
-    isFrameEditorMode = !isFrameEditorMode;
-    document.getElementById('btnFrameEditor')?.classList.toggle('active', isFrameEditorMode);
-    if (isFrameEditorMode) {
-        if (!physicsReady) { toast('Physics not loaded'); isFrameEditorMode = false; return; }
+    V.isFrameEditorMode = !V.isFrameEditorMode;
+    document.getElementById('btnFrameEditor')?.classList.toggle('active', V.isFrameEditorMode);
+    if (V.isFrameEditorMode) {
+        if (!V.physicsReady) { toast('Physics not loaded'); V.isFrameEditorMode = false; return; }
         showFrameEditorUI();
     } else {
         document.getElementById('frameEditorPanel')?.remove();
@@ -994,18 +570,18 @@ function showFrameEditorUI() {
     const count = () => { const v = parseInt(document.getElementById('frameCountInput').value); return Math.max(1, Math.min(200, isFinite(v) ? v : 1)); };
 
     document.getElementById('yawSlider').addEventListener('input', e => { document.getElementById('yawValue').textContent = parseFloat(e.target.value).toFixed(1); });
-    document.getElementById('btnAddFrame').addEventListener('click', () => { const inp = getInput(); for (let i = 0; i < count(); i++) frameEditor.addFrame({...inp, angles:[...inp.angles]}); updateEditorViz(); });
-    document.getElementById('btnInsertFrame').addEventListener('click', () => { const inp = getInput(); for (let i = 0; i < count(); i++) frameEditor.insertFrame(currentFrame+i, {...inp, angles:[...inp.angles]}); updateEditorViz(); });
-    document.getElementById('btnDeleteFrame').addEventListener('click', () => { frameEditor.deleteFrame(currentFrame); updateEditorViz(); });
-    document.getElementById('btnUndo').addEventListener('click', () => { frameEditor.undo(); updateEditorViz(); });
-    document.getElementById('btnRedo').addEventListener('click', () => { frameEditor.redo(); updateEditorViz(); });
-    document.getElementById('btnExportCfg').addEventListener('click', () => downloadFile('movement.cfg', frameEditor.exportToCfg()));
-    document.getElementById('btnExportJSON').addEventListener('click', () => downloadFile('movement.json', frameEditor.exportToJSON()));
+    document.getElementById('btnAddFrame').addEventListener('click', () => { const inp = getInput(); for (let i = 0; i < count(); i++) V.frameEditor.addFrame({...inp, angles:[...inp.angles]}); updateEditorViz(); });
+    document.getElementById('btnInsertFrame').addEventListener('click', () => { const inp = getInput(); for (let i = 0; i < count(); i++) V.frameEditor.insertFrame(V.currentFrame+i, {...inp, angles:[...inp.angles]}); updateEditorViz(); });
+    document.getElementById('btnDeleteFrame').addEventListener('click', () => { V.frameEditor.deleteFrame(V.currentFrame); updateEditorViz(); });
+    document.getElementById('btnUndo').addEventListener('click', () => { V.frameEditor.undo(); updateEditorViz(); });
+    document.getElementById('btnRedo').addEventListener('click', () => { V.frameEditor.redo(); updateEditorViz(); });
+    document.getElementById('btnExportCfg').addEventListener('click', () => downloadFile('movement.cfg', V.frameEditor.exportToCfg()));
+    document.getElementById('btnExportJSON').addEventListener('click', () => downloadFile('movement.json', V.frameEditor.exportToJSON()));
 }
 
 function updateEditorViz() {
     // FrameEditor stores Q3 coords; convert to frame convention: y = -Q3_Y
-    const frames = frameEditor.frames.map(f => ({
+    const frames = V.frameEditor.frames.map(f => ({
         frame: f.index, x: f.stateAfter.pos.x, y: -f.stateAfter.pos.y, z: f.stateAfter.pos.z,
         speed: Math.sqrt(f.stateAfter.vel.x**2 + f.stateAfter.vel.y**2 + f.stateAfter.vel.z**2),
         yawDeg: f.stateAfter.angles.yaw, onGround: f.stateAfter.onGround,
@@ -1023,42 +599,42 @@ function setupViewerControls() {
     // Playback
     document.getElementById('frameSlider')?.addEventListener('input', e => setCurrentFrame(parseInt(e.target.value)));
     document.getElementById('btnFirst')?.addEventListener('click', () => setCurrentFrame(0));
-    document.getElementById('btnPrev')?.addEventListener('click', () => setCurrentFrame(currentFrame - 1));
+    document.getElementById('btnPrev')?.addEventListener('click', () => setCurrentFrame(V.currentFrame - 1));
     document.getElementById('btnPlay')?.addEventListener('click', togglePlayback);
-    document.getElementById('btnNext')?.addEventListener('click', () => setCurrentFrame(currentFrame + 1));
-    document.getElementById('btnLast')?.addEventListener('click', () => setCurrentFrame(currentFrames.length - 1));
+    document.getElementById('btnNext')?.addEventListener('click', () => setCurrentFrame(V.currentFrame + 1));
+    document.getElementById('btnLast')?.addEventListener('click', () => setCurrentFrame(V.currentFrames.length - 1));
 
     // Viz toggles
     ['showPath','showVelocity','showYaw','showWish','showGround','showTrail'].forEach(id =>
         document.getElementById(id)?.addEventListener('change', updateVisualization));
     ['showSpawns','showTriggers','showItems'].forEach(id =>
         document.getElementById(id)?.addEventListener('change', updateEntityVisibility));
-    document.getElementById('showMap')?.addEventListener('change', e => { if (mapMesh) mapMesh.visible = e.target.checked; });
+    document.getElementById('showMap')?.addEventListener('change', e => { if (V.mapMesh) V.mapMesh.visible = e.target.checked; });
 
     // Camera
     document.getElementById('resetCamera')?.addEventListener('click', () => {
-        const spawn = findFirstSpawn(currentMapData?.bsp?.entities);
+        const spawn = findFirstSpawn(V.currentMapData?.bsp?.entities);
         if (spawn) {
             const o = bspLoader.parseOrigin(spawn.properties.origin);
             const pos = new THREE.Vector3(o[0], o[2], -o[1]);
-            camera.position.set(pos.x, pos.y + 800, pos.z);
-            controls.target.copy(pos);
-        } else { camera.position.set(500, 500, 500); controls.target.set(0, 0, 0); }
-        controls.update();
+            V.camera.position.set(pos.x, pos.y + 800, pos.z);
+            V.controls.target.copy(pos);
+        } else { V.camera.position.set(500, 500, 500); V.controls.target.set(0, 0, 0); }
+        V.controls.update();
     });
     document.getElementById('topView')?.addEventListener('click', () => {
-        if (!currentFrames.length) return;
-        const f = currentFrames[currentFrame];
-        camera.position.set(f.x, f.z + 800, f.y);
-        controls.target.set(f.x, f.z, f.y);
-        controls.update();
+        if (!V.currentFrames.length) return;
+        const f = V.currentFrames[V.currentFrame];
+        V.camera.position.set(f.x, f.z + 800, f.y);
+        V.controls.target.set(f.x, f.z, f.y);
+        V.controls.update();
     });
     document.getElementById('sideView')?.addEventListener('click', () => {
-        if (!currentFrames.length) return;
-        const f = currentFrames[currentFrame];
-        camera.position.set(f.x + 500, f.z + 200, f.y);
-        controls.target.set(f.x, f.z, f.y);
-        controls.update();
+        if (!V.currentFrames.length) return;
+        const f = V.currentFrames[V.currentFrame];
+        V.camera.position.set(f.x + 500, f.z + 200, f.y);
+        V.controls.target.set(f.x, f.z, f.y);
+        V.controls.update();
     });
 
     // Map brightness
@@ -1068,10 +644,17 @@ function setupViewerControls() {
 
     // Wireframe
     document.getElementById('toggleWireframe')?.addEventListener('click', () => {
-        if (!mapMesh || !currentMapData) return;
-        isWireframeMode = !isWireframeMode;
-        const m = bspLoader.createMaterial(currentMapData, isWireframeMode);
-        mapMesh.material.dispose(); mapMesh.material = m;
+        if (!V.mapMesh || !V.currentMapData) return;
+        V.isWireframeMode = !V.isWireframeMode;
+        V.scene.remove(V.mapMesh);
+        V.mapMesh.traverse(c => {
+            if (c.isMesh) {
+                c.geometry.dispose();
+                (Array.isArray(c.material) ? c.material : [c.material]).forEach(m => m.dispose());
+            }
+        });
+        V.mapMesh = bspLoader.buildMapGroup(V.currentMapData, V.isWireframeMode);
+        V.scene.add(V.mapMesh);
     });
 
     // Top bar actions
@@ -1087,7 +670,7 @@ function setupViewerControls() {
             const text = await e.target.files[0].text();
             const ta = document.getElementById('scriptTextArea');
             if (ta) ta.value = text;
-            if (!isScriptEditorOpen) toggleScriptEditor();
+            if (!V.isScriptEditorOpen) toggleScriptEditor();
             handleScriptRun();
         }
         e.target.value = '';
@@ -1098,22 +681,22 @@ function setupViewerControls() {
 
     // Waypoint editor
     document.getElementById('btnWaypointEditor')?.addEventListener('click', () => {
-        if (!waypointSystem) return;
-        isWaypointMode = waypointSystem.toggleEditMode();
-        document.getElementById('btnWaypointEditor')?.classList.toggle('active', isWaypointMode);
-        document.getElementById('waypointPanel').style.display = isWaypointMode ? '' : 'none';
-        if (isWaypointMode) renderer.domElement.style.cursor = 'crosshair';
-        else renderer.domElement.style.cursor = '';
+        if (!V.waypointSystem) return;
+        V.isWaypointMode = V.waypointSystem.toggleEditMode();
+        document.getElementById('btnWaypointEditor')?.classList.toggle('active', V.isWaypointMode);
+        document.getElementById('waypointPanel').style.display = V.isWaypointMode ? '' : 'none';
+        if (V.isWaypointMode) V.renderer.domElement.style.cursor = 'crosshair';
+        else V.renderer.domElement.style.cursor = '';
     });
-    renderer?.domElement?.addEventListener('click', e => { if (isWaypointMode && waypointSystem) waypointSystem.handleClick(e, camera); });
-    document.getElementById('btnResetWaypoints')?.addEventListener('click', () => waypointSystem?.resetWaypoints());
-    document.getElementById('btnClearWaypoints')?.addEventListener('click', () => waypointSystem?.clearAllWaypoints());
-    document.getElementById('btnExportWaypoints')?.addEventListener('click', () => { if (waypointSystem) downloadFile('waypoints.json', waypointSystem.exportToJSON()); });
+    V.renderer?.domElement?.addEventListener('click', e => { if (V.isWaypointMode && V.waypointSystem) V.waypointSystem.handleClick(e, V.camera); });
+    document.getElementById('btnResetWaypoints')?.addEventListener('click', () => V.waypointSystem?.resetWaypoints());
+    document.getElementById('btnClearWaypoints')?.addEventListener('click', () => V.waypointSystem?.clearAllWaypoints());
+    document.getElementById('btnExportWaypoints')?.addEventListener('click', () => { if (V.waypointSystem) downloadFile('waypoints.json', V.waypointSystem.exportToJSON()); });
     document.getElementById('btnImportWaypoints')?.addEventListener('click', () => document.getElementById('waypointImportInput')?.click());
     document.getElementById('waypointImportInput')?.addEventListener('change', async e => {
-        if (e.target.files[0] && waypointSystem) {
+        if (e.target.files[0] && V.waypointSystem) {
             const text = await e.target.files[0].text();
-            waypointSystem.importFromJSON(text);
+            V.waypointSystem.importFromJSON(text);
         }
         e.target.value = '';
     });
@@ -1134,14 +717,53 @@ function setupViewerControls() {
     // Keyboard
     document.addEventListener('keydown', e => {
         if (e.target.tagName === 'TEXTAREA' || e.target.tagName === 'INPUT') return;
+
+        // Fly mode movement keys (same behavior pattern as test-map-viewer)
+        if (V.isFlyMode) {
+            switch (e.code) {
+                case 'KeyW': V.moveForward = true; return;
+                case 'KeyS': V.moveBackward = true; return;
+                case 'KeyA': V.moveLeft = true; return;
+                case 'KeyD': V.moveRight = true; return;
+                case 'Space': e.preventDefault(); V.moveUp = true; return;
+                case 'ShiftLeft':
+                case 'ShiftRight': V.moveDown = true; return;
+            }
+        }
+
         switch (e.key) {
-            case 'ArrowLeft': e.preventDefault(); setCurrentFrame(currentFrame - 1); break;
-            case 'ArrowRight': e.preventDefault(); setCurrentFrame(currentFrame + 1); break;
+            case 'ArrowLeft': e.preventDefault(); setCurrentFrame(V.currentFrame - 1); break;
+            case 'ArrowRight': e.preventDefault(); setCurrentFrame(V.currentFrame + 1); break;
             case ' ': e.preventDefault(); togglePlayback(); break;
             case 'Home': e.preventDefault(); setCurrentFrame(0); break;
-            case 'End': e.preventDefault(); setCurrentFrame(currentFrames.length - 1); break;
+            case 'End': e.preventDefault(); setCurrentFrame(V.currentFrames.length - 1); break;
+            case 'f':
+            case 'F':
+                if (V.isFlyMode) V.flyControls.unlock();
+                else V.flyControls.lock();
+                break;
         }
     });
+
+    document.addEventListener('keyup', e => {
+        if (!V.isFlyMode) return;
+        switch (e.code) {
+            case 'KeyW': V.moveForward = false; break;
+            case 'KeyS': V.moveBackward = false; break;
+            case 'KeyA': V.moveLeft = false; break;
+            case 'KeyD': V.moveRight = false; break;
+            case 'Space': V.moveUp = false; break;
+            case 'ShiftLeft':
+            case 'ShiftRight': V.moveDown = false; break;
+        }
+    });
+
+    document.addEventListener('wheel', e => {
+        if (!V.isFlyMode) return;
+        e.preventDefault();
+        V.moveSpeed += e.deltaY > 0 ? -2 : 2;
+        V.moveSpeed = Math.max(1, Math.min(100, V.moveSpeed));
+    }, { passive: false });
 
     // Load demo from localStorage if available
     const stored = localStorage.getItem('q3DemoData');
@@ -1154,55 +776,60 @@ function setupViewerControls() {
 }
 
 function toggleScriptEditor() {
-    isScriptEditorOpen = !isScriptEditorOpen;
-    document.getElementById('btnScriptEditor')?.classList.toggle('active', isScriptEditorOpen);
-    document.getElementById('scriptEditorPanel').style.display = isScriptEditorOpen ? '' : 'none';
+    V.isScriptEditorOpen = !V.isScriptEditorOpen;
+    document.getElementById('btnScriptEditor')?.classList.toggle('active', V.isScriptEditorOpen);
+    document.getElementById('scriptEditorPanel').style.display = V.isScriptEditorOpen ? '' : 'none';
     // Hide legend when script editor is open (they share bottom-right)
-    if (isScriptEditorOpen) document.getElementById('legendPanel').style.display = 'none';
+    if (V.isScriptEditorOpen) document.getElementById('legendPanel').style.display = 'none';
     else document.getElementById('legendPanel').style.display = '';
 }
 
 function toggleOptimizer() {
-    isOptimizerOpen = !isOptimizerOpen;
-    document.getElementById('btnOptimize')?.classList.toggle('active', isOptimizerOpen);
-    document.getElementById('optimizerPanel').style.display = isOptimizerOpen ? '' : 'none';
+    V.isOptimizerOpen = !V.isOptimizerOpen;
+    document.getElementById('btnOptimize')?.classList.toggle('active', V.isOptimizerOpen);
+    document.getElementById('optimizerPanel').style.display = V.isOptimizerOpen ? '' : 'none';
 }
 
 function updateBrightness(multiplier) {
-    currentBrightness = multiplier;
-    if (ambientLight) ambientLight.intensity = 0.6 * multiplier;
-    if (directionalLight) directionalLight.intensity = 0.8 * multiplier;
-    if (mapMesh?.material) {
-        if (multiplier > 1) { mapMesh.material.emissive = new THREE.Color(0xffffff); mapMesh.material.emissiveIntensity = (multiplier - 1) * 0.3; }
-        else { mapMesh.material.emissive = new THREE.Color(0); mapMesh.material.emissiveIntensity = 0; }
-        mapMesh.material.needsUpdate = true;
+    V.currentBrightness = multiplier;
+    if (V.ambientLight) V.ambientLight.intensity = 0.6 * multiplier;
+    if (V.directionalLight) V.directionalLight.intensity = 0.8 * multiplier;
+    if (V.mapMesh) {
+        V.mapMesh.traverse(child => {
+            // Skip sky meshes (MeshBasicMaterial, no emissive) and non-meshes
+            if (!child.isMesh || child.userData.isSky) return;
+            const mat = child.material;
+            if (mat && mat.emissive !== undefined) {
+                if (multiplier > 1) {
+                    mat.emissive = new THREE.Color(0xffffff);
+                    mat.emissiveIntensity = (multiplier - 1) * 0.3;
+                } else {
+                    mat.emissive = new THREE.Color(0);
+                    mat.emissiveIntensity = 0;
+                }
+                mat.needsUpdate = true;
+            }
+        });
     }
-    if (renderer) renderer.toneMappingExposure = multiplier;
-}
-
-// ═══════════════════════════════════════════════════════════════════════
-//  Utilities
-// ═══════════════════════════════════════════════════════════════════════
-function toast(msg) {
-    const el = document.createElement('div');
-    el.className = 'notification-toast';
-    el.textContent = msg;
-    document.body.appendChild(el);
-    setTimeout(() => el.remove(), 2200);
-}
-
-function downloadFile(name, content) {
-    const a = document.createElement('a');
-    a.href = URL.createObjectURL(new Blob([content], { type: 'text/plain' }));
-    a.download = name;
-    document.body.appendChild(a); a.click();
-    setTimeout(() => { document.body.removeChild(a); URL.revokeObjectURL(a.href); }, 100);
+    if (V.renderer) V.renderer.toneMappingExposure = multiplier;
 }
 
 function animate() {
     requestAnimationFrame(animate);
-    controls?.update();
-    renderer?.render(scene, camera);
+    if (V.isFlyMode && V.flyControls.isLocked) {
+        if (V.moveForward)  V.flyControls.moveForward(V.moveSpeed);
+        if (V.moveBackward) V.flyControls.moveForward(-V.moveSpeed);
+        if (V.moveLeft)     V.flyControls.moveRight(-V.moveSpeed);
+        if (V.moveRight)    V.flyControls.moveRight(V.moveSpeed);
+        if (V.moveUp)       V.camera.position.y += V.moveSpeed;
+        if (V.moveDown)     V.camera.position.y -= V.moveSpeed;
+    } else {
+        // OrbitControls.update() forces the camera to look at its target every
+        // frame, which would override PointerLockControls mouse-look. Only run
+        // it when fly mode is OFF.
+        V.controls?.update();
+    }
+    V.renderer?.render(V.scene, V.camera);
 }
 
 // ═══════════════════════════════════════════════════════════════════════

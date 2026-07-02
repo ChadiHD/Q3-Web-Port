@@ -12,6 +12,11 @@ namespace Q3BeamSearch
 
             // Register demo service without SignalR dependency
             builder.Services.AddSingleton<CfgDemoService>();
+            builder.Services.AddHttpClient("defragProxy", c =>
+            {
+                c.Timeout = TimeSpan.FromSeconds(60);
+                c.DefaultRequestHeaders.UserAgent.ParseAdd("Q3TASViewer/2.0");
+            });
 
             builder.Services.AddCors(o =>
             {
@@ -117,6 +122,32 @@ namespace Q3BeamSearch
                 catch (Exception ex)
                 {
                     return Results.Problem($"Error getting demo stats: {ex.Message}");
+                }
+            });
+
+            // Proxy endpoint: fetches a .pk3 from defrag.racing and streams it to the client.
+            // Only the defrag.racing host is permitted to prevent SSRF.
+            app.MapGet("/api/map-proxy", async (string mapname, IHttpClientFactory httpFactory) =>
+            {
+                // Strip any path separators to prevent directory traversal
+                var safe = Regex.Replace(mapname.Trim(), @"[/\\]", "");
+                if (string.IsNullOrEmpty(safe) || !Regex.IsMatch(safe, @"^[\w\-\.]+$", RegexOptions.IgnoreCase))
+                    return Results.BadRequest("Invalid map name. Must be a valid *.pk3 filename.");
+
+                var url = $"https://defrag.racing/maps/download/{safe.Replace(".pk3", "", StringComparison.OrdinalIgnoreCase)}";
+                try
+                {
+                    using var client = httpFactory.CreateClient("defragProxy");
+                    using var response = await client.GetAsync(url, HttpCompletionOption.ResponseHeadersRead);
+                    if (response.StatusCode == System.Net.HttpStatusCode.NotFound)
+                        return Results.NotFound($"Map '{safe}' not found on defrag.racing");
+                    response.EnsureSuccessStatusCode();
+                    var bytes = await response.Content.ReadAsByteArrayAsync();
+                    return Results.File(bytes, "application/octet-stream", safe);
+                }
+                catch (HttpRequestException ex)
+                {
+                    return Results.Problem($"Failed to fetch map: {ex.Message}");
                 }
             });
 
