@@ -1,8 +1,0 @@
-﻿using Microsoft.AspNetCore.SignalR;
-
-namespace Q3BeamSearch.Web.Hubs
-{
-    public class SimulationHub : Hub
-    {
-    }
-}
