@@ -34,12 +34,14 @@ export const bspLoader = {
         const skySearchName = wsSky ?? skyBspEntry?.name ?? null;
         console.log(`[skybox] worldspawn sky='${wsSky}', BSP sky entry='${skyBspEntry?.name}'`);
         const skyTexture = skySearchName ? await this.loadSkyboxFromPK3(zip, skySearchName) : null;
-        return { type: 'pk3', bsp, textures, skyTexture };
+        // rawBsp: the untouched .bsp bytes, forwarded to the WASM collision model.
+        return { type: 'pk3', bsp, textures, skyTexture, rawBsp: buf };
     },
 
     async loadBSP(file) {
         const buf = await file.arrayBuffer();
-        return { type: 'bsp', bsp: this.parseBSP(buf), textures: new Map() };
+        // rawBsp: the untouched .bsp bytes, forwarded to the WASM collision model.
+        return { type: 'bsp', bsp: this.parseBSP(buf), textures: new Map(), rawBsp: buf };
     },
 
     async loadTexturesFromPK3(zip) {

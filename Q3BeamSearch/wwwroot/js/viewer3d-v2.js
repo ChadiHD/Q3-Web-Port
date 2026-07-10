@@ -32,6 +32,9 @@ async function initQ3Physics() {
         V.Q3Physics.ccall('SetGravity', null, ['number'], [800]);
         V.physicsReady = true;
         console.log('[v2] oDFe WASM physics ready');
+        // If a map was already loaded before physics finished initialising,
+        // push its collision model into the CM now.
+        if (V.currentMapData) loadCollisionIntoWasm(V.currentMapData);
     } catch (e) {
         V.physicsReady = false;
         console.error('[v2] oDFe WASM failed to load — viewer will not function', e);
@@ -100,12 +103,61 @@ async function handleMapUpload(file) {
         const mapData = await bspLoader.loadMapFromFile(file);
         V.currentMapData = mapData;
         V.collisionSystem.loadFromBSP(mapData.bsp);
+        // Feed the raw BSP to the WASM collision model so Pmove traces hit real
+        // world geometry (walls, floors, ramps, and curved patch surfaces).
+        loadCollisionIntoWasm(mapData);
         setUploadStatus('Map loaded ✓', 'ok');
         setTimeout(() => transitionToViewer(), 400);
     } catch (err) {
         console.error('[v2] Map load failed', err);
         setUploadStatus('Failed: ' + err.message, 'error');
     }
+}
+
+// Uploads the raw .bsp bytes into the WASM heap and loads them into the ioq3
+// collision model (CM). After this, StepPhysics/SimulateFrames collide against
+// the real map inside Pmove. Safe to call before physics is ready — it becomes
+// a no-op and is retried once initQ3Physics() finishes.
+function loadCollisionIntoWasm(mapData) {
+    if (!V.physicsReady || !V.Q3Physics) return false;
+    if (!mapData || !mapData.rawBsp) {
+        console.warn('[v2] no raw BSP bytes available — collision model not loaded');
+        return false;
+    }
+    const Q3 = V.Q3Physics;
+
+    // The collision exports only exist in a WASM build that includes the CM
+    // module (wasm/src/cm). If q3physics.wasm hasn't been rebuilt since that was
+    // added, these are missing — skip gracefully so the MAP STILL LOADS, just
+    // without in-engine collision. Rebuild via wasm/build.ps1 to enable it.
+    if (typeof Q3._LoadCollisionMap !== 'function' || typeof Q3._HasCollisionMap !== 'function') {
+        console.warn('[v2] WASM module has no collision exports — rebuild wasm (wasm/build.ps1). ' +
+                     'Map will load without in-engine collision.');
+        toast('Collision unavailable — WASM needs rebuild (see console)');
+        return false;
+    }
+
+    // Never let a collision-upload problem abort map loading.
+    let ok = false;
+    try {
+        const bytes = new Uint8Array(mapData.rawBsp);
+        const ptr = Q3._malloc(bytes.length);
+        if (!ptr) { console.error('[v2] _malloc failed for BSP (%d bytes)', bytes.length); return false; }
+        try {
+            Q3.HEAPU8.set(bytes, ptr);
+            Q3.ccall('LoadCollisionMap', null, ['number', 'number'], [ptr, bytes.length]);
+        } finally {
+            Q3._free(ptr);
+        }
+        ok = Q3.ccall('HasCollisionMap', 'number', [], []) === 1;
+        console.log('[v2] WASM collision model %s (%d bytes)', ok ? 'loaded ✓' : 'FAILED', bytes.length);
+        if (!ok) toast('Collision model failed to load');
+    } catch (e) {
+        console.error('[v2] collision upload failed:', e);
+        toast('Collision upload failed (see console)');
+        ok = false;
+    }
+    return ok;
 }
 
 function transitionToViewer() {

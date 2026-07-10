@@ -1,4 +1,5 @@
 #include <emscripten.h>
+#include <stdio.h>
 #include <string.h>
 #include <math.h>
 
@@ -47,13 +48,29 @@ static int PM_PointContents(const vec3_t point, int passEntityNum) {
     return trap_PointContents(point, passEntityNum);
 }
 
+// ── Collision model bridge (wasm/src/cm) ───────────────────────────────
+// JS uploads the raw .bsp bytes into WASM memory and calls LoadCollisionMap.
+// After that, Pmove's trace/pointcontents hit the real world geometry.
+void CM_LoadWorldFromMemory( void *data, int length );
+extern int cm_worldLoaded;
+
+EMSCRIPTEN_KEEPALIVE
+void LoadCollisionMap( void *data, int length ) {
+    CM_LoadWorldFromMemory( data, length );
+}
+
+EMSCRIPTEN_KEEPALIVE
+int HasCollisionMap( void ) {
+    return cm_worldLoaded;
+}
+
 // Initialize physics module
 EMSCRIPTEN_KEEPALIVE
 void InitPhysics() {
     memset(&pm, 0, sizeof(pm));
     memset(&ps, 0, sizeof(ps));
     memset(&cmd, 0, sizeof(cmd));
-    
+
     // Set default values
     ps.pm_type = PM_NORMAL;
     ps.gravity = 800;
@@ -62,7 +79,7 @@ void InitPhysics() {
     // Wire up the trace/pointcontents callbacks so Pmove doesn't call NULL
     pm.trace = PM_Trace;
     pm.pointcontents = PM_PointContents;
-    
+
     printf("[oDFe WASM] Physics initialized\n");
 }
 
@@ -105,19 +122,19 @@ void StepPhysics(
     VectorCopy(pos, ps.origin);
     VectorCopy(vel, ps.velocity);
     VectorCopy(angles, ps.viewangles);
-    
+
     // Setup command
     cmd.forwardmove = forwardmove;
     cmd.rightmove = rightmove;
     cmd.upmove = upmove;
     cmd.buttons = buttons;
     cmd.serverTime = ps.commandTime + (int)(frametime * 1000.0f);
-    
+
     // Convert angles to command angles (short format)
     cmd.angles[0] = ANGLE2SHORT(angles[0]);
     cmd.angles[1] = ANGLE2SHORT(angles[1]);
     cmd.angles[2] = ANGLE2SHORT(angles[2]);
-    
+
     // Setup pmove structure
     pm.ps = &ps;
     pm.cmd = cmd;
@@ -126,10 +143,10 @@ void StepPhysics(
     pm.noFootsteps = qtrue;
     pm.trace = PM_Trace;
     pm.pointcontents = PM_PointContents;
-    
+
     // Run oDFe physics (THE REAL DEAL!)
     Pmove(&pm);
-    
+
     // Copy results back
     VectorCopy(ps.origin, pos);
     VectorCopy(ps.velocity, vel);
@@ -145,7 +162,7 @@ int IsPlayerOnGround() {
 // Get horizontal speed
 EMSCRIPTEN_KEEPALIVE
 float GetHorizontalSpeed() {
-    return sqrt(ps.velocity[0] * ps.velocity[0] + 
+    return sqrt(ps.velocity[0] * ps.velocity[0] +
                 ps.velocity[1] * ps.velocity[1]);
 }
 
@@ -192,19 +209,19 @@ void SimulateFrames(
     VectorCopy(initialPos, ps.origin);
     VectorCopy(initialVel, ps.velocity);
     VectorCopy(initialAngles, ps.viewangles);
-    
+
     float frametime = 0.008f; // 125 FPS
-    
+
     for (int i = 0; i < numFrames; i++) {
         int idx = i * 4;
-        
+
         // Unpack command
         cmd.forwardmove = commands[idx + 0];
         cmd.rightmove = commands[idx + 1];
         cmd.upmove = commands[idx + 2];
         cmd.buttons = commands[idx + 3];
         cmd.serverTime = ps.commandTime + 8; // 8ms per frame
-        
+
         // Run physics
         pm.ps = &ps;
         pm.cmd = cmd;
@@ -212,7 +229,7 @@ void SimulateFrames(
         pm.trace = PM_Trace;
         pm.pointcontents = PM_PointContents;
         Pmove(&pm);
-        
+
         // Store position
         int outIdx = i * 3;
         outPositions[outIdx + 0] = ps.origin[0];
