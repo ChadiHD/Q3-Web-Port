@@ -13,7 +13,7 @@ export const V = {
     Q3Physics: null, physicsReady: false,
 
     // Playback
-    currentFrames: [], currentFrame: 0, isPlaying: false, playbackInterval: null,
+    currentFrames: [], currentFrame: 0, isPlaying: false, playbackFrame: null,
 
     // Map
     mapMesh: null, isWireframeMode: false, currentMapData: null, currentBrightness: 1.0,
@@ -34,11 +34,13 @@ export const V = {
     collisionSystem: new BSPCollisionSystem(),
     frameEditor: null,
     waypointSystem: null,
-    optimizer: null,
     isFrameEditorMode: false,
     isWaypointMode: false,
     isScriptEditorOpen: false,
     isOptimizerOpen: false,
+    lastRoute: null,   // inputs of the last optimizer route, for its cfg export
+    timerTriggers: null,   // DeFRaG start / checkpoint / stop trigger boxes (race-timer.js)
+    currentRace: null,     // raceTime() of the loaded frames
 
     isViewerInitialized: false,
 

@@ -15,10 +15,12 @@ import { PLAYER_PHYSICS_BOUNDS } from './collision-detection.js';
 import { bspLoader } from './bsp-loader.js';
 import { slideMove } from './slide-move.js';
 import { V } from './viewer-state.js';
-import { q3YawToThree } from './q3-math.js';
+import { raceTime, formatMs, FRAME_MS } from './race-timer.js';
 import { toast, downloadFile } from './ui-utils.js';
 import { initThreeJS } from './scene-setup.js';
 import { renderMap, findFirstSpawn, updateEntityVisibility } from './map-render.js';
+import { runScript } from './movement-script.js';
+import { exportBaked, exportScript } from './cfg-export.js';
 
 
 // ═══════════════════════════════════════════════════════════════════════
@@ -186,28 +188,33 @@ function transitionToViewer() {
     const disp = document.getElementById('frameDisplay');
     if (disp) disp.textContent = '0 / 0';
 
-    renderMap(V.currentMapData);
+    renderMap(V.currentMapData);   // also finds the DeFRaG timer triggers (V.timerTriggers)
+    V.currentRace = null;
+    V.lastRoute = null;
+    document.getElementById('btnExportRoute').style.display = 'none';
+    const t = V.timerTriggers;
+    document.getElementById('optFinishRow').style.display = t.stop.length ? 'block' : 'none';
+    if (t.start.length || t.stop.length)
+        toast(`Timer triggers: ${t.start.length} start · ${t.checkpoints.length} checkpoints · ${t.stop.length} stop`);
 }
 
 // ═══════════════════════════════════════════════════════════════════════
 //  Q3 physics helpers (no fallback — requires WASM)
 // ═══════════════════════════════════════════════════════════════════════
-function computePhysics(frameIndex) {
-    if (!V.physicsReady || frameIndex < 1 || frameIndex >= V.currentFrames.length) {
-        return { hSpeed: 0, velAngle: 0, wishAngle: 0, efficiency: 0 };
+// A frame's directions as Q3 yaws (radians): velocity after the frame, the view, and the
+// wish direction its keys gave (Pmove: forward·f + right·s with right = view - 90°, so
+// view + atan2(-s, f); null with no move keys). WASM runs carry the real Pmove velocity
+// (vx, vy); other frames fall back to the movement since the previous frame.
+function frameVectors(frameIndex) {
+    const cur = V.currentFrames[frameIndex], prev = V.currentFrames[frameIndex - 1];
+    let vx = cur.vx, vy = cur.vy;
+    if (vx === undefined) {
+        vx = prev ? (cur.x - prev.x) * 125 : 0;
+        vy = prev ? -(cur.y - prev.y) * 125 : 0;   // frame y is -Q3 y
     }
-    const prev = V.currentFrames[frameIndex - 1], cur = V.currentFrames[frameIndex];
-    const dt = 1/125;
-    const vx = (cur.x - prev.x) / dt, vy = (cur.y - prev.y) / dt;
-    const hSpeed = Math.sqrt(vx*vx + vy*vy);
-    const velAngle = Math.atan2(vy, vx);
-    const wishAngle = velAngle + Math.PI / 6;
-    const wishDeg = wishAngle * 180 / Math.PI;
-    const velDeg = velAngle * 180 / Math.PI;
-    const diff = Math.abs(((wishDeg - velDeg + 180) % 360) - 180);
-    let eff = 0;
-    if (diff <= 45) { eff = Math.max(0, 100 - (Math.abs(diff-30)/45)*100); if (!cur.onGround) eff = Math.min(100, eff * 1.2); }
-    return { hSpeed, velAngle, wishAngle, efficiency: eff };
+    const yaw = (cur.yawDeg ?? 0) * Math.PI / 180;
+    const f = cur.forwardMove ?? 0, s = cur.rightMove ?? 0;
+    return { hSpeed: Math.hypot(vx, vy), velYaw: Math.atan2(vy, vx), yaw, wishYaw: f || s ? yaw + Math.atan2(-s, f) : null };
 }
 
 // ═══════════════════════════════════════════════════════════════════════
@@ -258,36 +265,36 @@ function updateVisualization() {
     }
     const fr = V.currentFrames[V.currentFrame];
     if (!fr) return;
-    const phys = computePhysics(V.currentFrame);
+    const phys = frameVectors(V.currentFrame);
 
     V.playerSphere.visible = true;
     V.playerSphere.position.set(fr.x, fr.z, fr.y);
 
-    // Velocity arrow
+    // Arrows point along +X; rotation.y = Q3 yaw (Three Z is -Q3 Y), see scene-setup.js
+    // Velocity arrow, scaled with speed
     if (phys.hSpeed > 10 && (document.getElementById('showVelocity')?.checked ?? true)) {
         V.velocityArrow.visible = true;
         V.velocityArrow.position.copy(V.playerSphere.position);
-        V.velocityArrow.rotation.y = q3YawToThree(phys.velAngle);
+        V.velocityArrow.rotation.y = phys.velYaw;
         const s = Math.min(Math.max(phys.hSpeed / 400, 0.4), 3);
         V.velocityArrow.scale.set(s, s, s);
     } else V.velocityArrow.visible = false;
 
-    // Yaw arrow
-    const yawRad = fr.yawDeg * Math.PI / 180;
+    // Yaw (view) arrow
     V.yawArrow.position.copy(V.playerSphere.position);
-    V.yawArrow.rotation.y = q3YawToThree(yawRad);
+    V.yawArrow.rotation.y = phys.yaw;
     V.yawArrow.visible = document.getElementById('showYaw')?.checked ?? true;
 
-    // Wish arrow
-    if (phys.hSpeed > 10 && (document.getElementById('showWish')?.checked ?? true)) {
+    // Wish arrow: where this frame's keys push
+    if (phys.wishYaw !== null && (document.getElementById('showWish')?.checked ?? true)) {
         V.wishArrow.visible = true;
         V.wishArrow.position.copy(V.playerSphere.position);
-        V.wishArrow.rotation.y = q3YawToThree(phys.wishAngle);
+        V.wishArrow.rotation.y = phys.wishYaw;
     } else V.wishArrow.visible = false;
 
-    // Ground
+    // Ground: a disc at the feet (origin is 24 above them)
     if (fr.onGround && (document.getElementById('showGround')?.checked ?? true)) {
-        V.groundIndicator.position.set(fr.x, fr.z - 10, fr.y);
+        V.groundIndicator.position.set(fr.x, fr.z - 23, fr.y);
         V.groundIndicator.visible = true;
     } else V.groundIndicator.visible = false;
 
@@ -318,11 +325,23 @@ function updateInfoPanel(fr, phys) {
     const $ = id => document.getElementById(id);
     if ($('infoFrame'))    $('infoFrame').textContent = fr.frame;
     if ($('infoSpeed'))    $('infoSpeed').textContent = `${(fr.speed ?? 0).toFixed(1)} ups`;
-    if ($('infoPosition')) $('infoPosition').textContent = `${fr.x.toFixed(1)}, ${fr.y.toFixed(1)}, ${fr.z.toFixed(1)}`;
-    if ($('infoYaw'))      $('infoYaw').textContent = `${fr.yawDeg.toFixed(1)}°`;
+    // Q3 coordinates, as viewpos / scriptpos print them (frame y is -Q3 y)
+    if ($('infoPosition')) $('infoPosition').textContent = `${fr.x.toFixed(1)}, ${(-fr.y).toFixed(1)}, ${fr.z.toFixed(1)}`;
+    if ($('infoYaw'))      $('infoYaw').textContent = `${((((fr.yawDeg ?? 0) % 360) + 540) % 360 - 180).toFixed(1)}°`;
     if ($('infoGround'))   $('infoGround').textContent = fr.onGround ? 'Yes' : 'No';
     if ($('infoHeight'))   $('infoHeight').textContent = fr.z.toFixed(1);
     if ($('infoHSpeed'))   $('infoHSpeed').textContent = `${phys.hSpeed.toFixed(1)} ups`;
+    if ($('infoTimer'))    $('infoTimer').textContent = timerText(V.currentFrame);
+}
+
+// The DeFRaG race timer at frame i: from the last frame in the start trigger, frozen at the
+// first frame in the stop trigger (race-timer.js).
+function timerText(i) {
+    const r = V.currentRace;
+    if (!r) return V.timerTriggers?.start.length || V.timerTriggers?.stop.length ? 'not started' : '-';
+    if (i < r.start) return 'not started';
+    if (r.stop !== null && i >= r.stop) return `${formatMs(r.ms)} (finished)`;
+    return formatMs((i - Math.max(r.start, 0)) * FRAME_MS);
 }
 
 // ═══════════════════════════════════════════════════════════════════════
@@ -339,145 +358,75 @@ function setCurrentFrame(idx) {
 }
 
 function togglePlayback() { V.isPlaying ? stopPlayback() : startPlayback(); }
+
+// Real time: 125 game frames per second × the speed selector, read every tick so a change
+// applies at once. Steps through every frame (trail, waypoint checks), however many a
+// display frame covers.
 function startPlayback() {
     if (V.isPlaying || !V.currentFrames.length) return;
+    if (V.currentFrame >= V.currentFrames.length - 1) setCurrentFrame(0);   // at the end: replay
     V.isPlaying = true;
     const btn = document.getElementById('btnPlay'); if (btn) btn.textContent = '⏸';
-    const speed = parseFloat(document.getElementById('playbackSpeed')?.value || '1');
-    V.playbackInterval = setInterval(() => {
-        if (V.currentFrame >= V.currentFrames.length - 1) { stopPlayback(); return; }
-        setCurrentFrame(V.currentFrame + 1);
-    }, Math.max(16, 1000 / (125 * speed)));
+    let last = performance.now(), due = 0;
+    const tick = now => {
+        if (!V.isPlaying) return;
+        const speed = parseFloat(document.getElementById('playbackSpeed')?.value || '1');
+        due += Math.min(now - last, 250) * 0.125 * speed;   // ms → game frames; cap a stalled tab's catch-up
+        last = now;
+        for (; due >= 1; due--) {
+            if (V.currentFrame >= V.currentFrames.length - 1) { stopPlayback(); return; }
+            setCurrentFrame(V.currentFrame + 1);
+        }
+        V.playbackFrame = requestAnimationFrame(tick);
+    };
+    V.playbackFrame = requestAnimationFrame(tick);
 }
 function stopPlayback() {
     V.isPlaying = false;
     const btn = document.getElementById('btnPlay'); if (btn) btn.textContent = '⏯';
-    if (V.playbackInterval) { clearInterval(V.playbackInterval); V.playbackInterval = null; }
+    if (V.playbackFrame) { cancelAnimationFrame(V.playbackFrame); V.playbackFrame = null; }
 }
 
 // ═══════════════════════════════════════════════════════════════════════
-//  Movement script parser (Q3 cfg format → frames via WASM)
+//  WASM runs (scripts, optimizer) → viewer frames
 // ═══════════════════════════════════════════════════════════════════════
-function parseMovementScript(text) {
-    if (!V.physicsReady) { toast('Physics engine not loaded'); return []; }
+// inputs [{f, s, u, yaw, yawShort}] + replay {positions, velocities, onGround} in Q3 coords.
+// Frame convention: x = Q3_X, y = -Q3_Y (Three.js Z), z = Q3_Z (Three.js Y)
+function framesFromRun(inputs, replay) {
+    return replay.positions.map((p, i) => ({
+        frame: i, x: p.x, y: -p.y, z: p.z,
+        vx: replay.velocities[i].x, vy: replay.velocities[i].y,   // Q3 coords, the real Pmove velocity
+        speed: Math.hypot(replay.velocities[i].x, replay.velocities[i].y),
+        yawDeg: inputs[i].yaw, yawShort: inputs[i].yawShort, onGround: replay.onGround[i],
+        forwardMove: inputs[i].f, rightMove: inputs[i].s, upMove: inputs[i].u, buttons: 0
+    }));
+}
 
-    // Reset WASM physics state to clear stale pm_flags (e.g. PMF_JUMP_HELD from a
-    // previous run), otherwise jumping and other state-dependent behaviours break
-    // on second and subsequent script executions.
-    const Q3 = V.Q3Physics;
-    Q3.ccall('InitPhysics', null, [], []);
-    Q3.ccall('SetPlayerSpeed', null, ['number'], [320]);
-    Q3.ccall('SetGravity', null, ['number'], [800]);
-
-    const lines = text.split('\n').map(l => l.trim()).filter(l => l && !l.startsWith('//'));
-    const frames = [];
-
-    let forward = false, back = false, moveleft = false, moveright = false;
-    let turnLeft = false, turnRight = false;
-    let moveup = false, movedown = false;
-    let yawSpeed = 140;
-
-    const posPtr = Q3._malloc(12), velPtr = Q3._malloc(12), angPtr = Q3._malloc(12);
+// The map's first spawn as {origin: Q3 [x, y, z], angle}, or null
+function mapSpawn() {
     const spawn = findFirstSpawn(V.currentMapData?.bsp?.entities);
-    const spawnOrigin = spawn ? bspLoader.parseOrigin(spawn.properties.origin) : [0, 0, 0];
-    const spawnAngle = spawn ? parseFloat(spawn.properties.angle || '0') : 0;
-
-    Q3.HEAPF32.set(spawnOrigin, posPtr >> 2);
-    Q3.HEAPF32.set([0, 0, 0], velPtr >> 2);
-    Q3.HEAPF32.set([0, spawnAngle, 0], angPtr >> 2);
-
-    function emitFrames(count) {
-        for (let i = 0; i < count; i++) {
-            let fwd = 0;
-            if (forward && !back) fwd = 127;
-            else if (back && !forward) fwd = -127;
-            let str = 0;
-            if (moveright && !moveleft) str = 127;
-            else if (moveleft && !moveright) str = -127;
-            let up = moveup ? 200 : (movedown ? -200 : 0);
-            const buttons = moveup ? 2 : 0;
-
-            const curYaw = Q3.HEAPF32[(angPtr >> 2) + 1];
-            let newYaw = curYaw;
-            if (turnLeft) newYaw += yawSpeed / 125;
-            if (turnRight) newYaw -= yawSpeed / 125;
-            Q3.HEAPF32[(angPtr >> 2) + 1] = newYaw;
-
-            Q3.ccall('StepPhysics', null,
-                ['number','number','number','number','number','number','number','number'],
-                [posPtr, velPtr, angPtr, fwd, str, up, buttons, 0.008]);
-
-            const p = Q3.HEAPF32.subarray(posPtr >> 2, (posPtr >> 2) + 3);
-            const v = Q3.HEAPF32.subarray(velPtr >> 2, (velPtr >> 2) + 3);
-            const a = Q3.HEAPF32.subarray(angPtr >> 2, (angPtr >> 2) + 3);
-            const onGround = Q3.ccall('IsPlayerOnGround', 'number', [], []) === 1;
-            const speed = Math.sqrt(v[0]*v[0] + v[1]*v[1] + v[2]*v[2]);
-
-            // Frame convention: x = Q3_X, y = -Q3_Y (Three.js Z), z = Q3_Z (Three.js Y)
-            frames.push({
-                frame: frames.length,
-                x: p[0], y: -p[1], z: p[2],
-                speed, yawDeg: a[1], onGround,
-                forwardMove: fwd, rightMove: str, upMove: up, buttons
-            });
-        }
-    }
-
-    for (const rawLine of lines) {
-        const cmds = rawLine.split(';').map(c => c.trim()).filter(Boolean);
-        for (const cmd of cmds) {
-            const lower = cmd.toLowerCase();
-            if (lower === '+forward')        forward = true;
-            else if (lower === '-forward')   forward = false;
-            else if (lower === '+back')      back = true;
-            else if (lower === '-back')      back = false;
-            else if (lower === '+moveleft')  moveleft = true;
-            else if (lower === '-moveleft')  moveleft = false;
-            else if (lower === '+moveright') moveright = true;
-            else if (lower === '-moveright') moveright = false;
-            else if (lower === '+moveup')    moveup = true;
-            else if (lower === '-moveup')    moveup = false;
-            else if (lower === '+movedown')  movedown = true;
-            else if (lower === '-movedown')  movedown = false;
-            else if (lower === '+left')      turnLeft = true;
-            else if (lower === '-left')      turnLeft = false;
-            else if (lower === '+right')     turnRight = true;
-            else if (lower === '-right')     turnRight = false;
-            else if (lower.startsWith('cl_yawspeed') || lower.startsWith('seta cl_yawspeed')) {
-                const parts = cmd.split(/\s+/);
-                const val = parseFloat(parts[parts.length - 1]);
-                if (isFinite(val)) yawSpeed = val;
-            }
-            else if (lower.startsWith('wait')) {
-                const parts = cmd.split(/\s+/);
-                // In Q3, bare `wait` = 1 game frame; `wait N` = N frames at 125 Hz.
-                // Previously this was halved (/ 2) which caused too few frames and
-                // the player never reaching 320 ups.
-                const waitVal = parseInt(parts[1]) || 1;
-                emitFrames(Math.max(1, waitVal));
-            }
-        }
-    }
-
-    Q3._free(posPtr); Q3._free(velPtr); Q3._free(angPtr);
-    return frames;
+    return spawn ? { origin: bspLoader.parseOrigin(spawn.properties.origin), angle: parseFloat(spawn.properties.angle || '0') } : null;
 }
 
 // ═══════════════════════════════════════════════════════════════════════
 //  Load demo / script / JSON data
 // ═══════════════════════════════════════════════════════════════════════
-function loadFrames(frames) {
+// simulated: the frames came from the WASM Pmove (real collision already applied),
+// so the JS re-clip below must not overwrite their positions, speed and ground state.
+// keepCamera: re-runs (optimizer, scripts, editor) leave the view where the user put it.
+function loadFrames(frames, { simulated = false, keepCamera = false } = {}) {
     V.currentFrames = frames;
     V.currentFrame = 0;
     V.playerSphere.visible = frames.length > 0;
     const slider = document.getElementById('frameSlider');
     if (slider) slider.max = Math.max(0, frames.length - 1);
-    applyCollisionsToFrames();
+    if (!simulated) applyCollisionsToFrames();
+    V.currentRace = raceTime(frames.map(f => ({ x: f.x, y: -f.y, z: f.z })), V.timerTriggers);
     updatePath();
     setCurrentFrame(0);
 
     // Camera to first frame top-down (criterion 3)
-    if (frames.length > 0) {
+    if (frames.length > 0 && !keepCamera) {
         const f = frames[0];
         V.camera.position.set(f.x, f.z + 800, f.y);
         V.camera.lookAt(f.x, f.z, f.y);
@@ -500,28 +449,95 @@ async function handleDemoUpload(file) {
     }
 }
 
+// ═══════════════════════════════════════════════════════════════════════
+//  cfg export for the modified oDFe (cfg-export.js)
+// ═══════════════════════════════════════════════════════════════════════
+function exportOpts(kind) {
+    const map = V.currentMapData?.mapName || 'map';
+    return { Q3: V.Q3Physics, spawn: mapSpawn(), map, name: `${map}_${kind}`.replace(/[^\w-]/g, '_'), triggers: V.timerTriggers };
+}
+
+// make() returns {files: [one .cfg], run}. Downloads it; returns a status line, or throws.
+async function downloadExport(make) {
+    if (!V.physicsReady) throw new Error('physics engine not loaded');
+    const { files, run } = make();
+    if (run.error) throw new Error(run.error);
+    downloadFile(files[0].name, files[0].text);
+    const v = run.replay.velocities.at(-1), name = files[0].name.replace(/\.cfg$/, '');
+    return `Exported ${files[0].name} (in game: scriptplay ${name}): ${run.inputs.length} frames, ends at ${Math.round(Math.hypot(v.x, v.y))} ups`;
+}
+
+async function exportToStatus(el, make) {
+    try {
+        const msg = await downloadExport(make);
+        if (el) { el.textContent = msg; el.style.color = '#aaa'; }
+        toast(msg);
+    } catch (e) {
+        if (el) { el.textContent = `Export failed: ${e.message}`; el.style.color = '#ff6b6b'; }
+        toast('Export failed');
+    }
+}
+
+// " · time 0:04.328" when the run crossed the start and stop triggers, else what's missing
+function raceSummary(r) {
+    if (!V.timerTriggers?.start.length && !V.timerTriggers?.stop.length) return '';
+    if (!r) return ' · timer not started';
+    return r.ms === null ? ' · stop trigger not reached' : ` · time ${formatMs(r.ms)}`;
+}
+
+// Runs the script the way the modified oDFe executes it (movement-script.js), from the
+// map spawn, on the real WASM Pmove.
 function handleScriptRun() {
     const text = document.getElementById('scriptTextArea')?.value;
     if (!text?.trim()) { toast('Script is empty'); return; }
-    const frames = parseMovementScript(text);
-    if (frames.length === 0) { toast('Script produced no frames'); return; }
-    loadFrames(frames);
+    if (!V.physicsReady) { toast('Physics engine not loaded'); return; }
+    const { inputs, replay, error } = runScript(text, V.Q3Physics, mapSpawn());
     const el = document.getElementById('scriptStatus');
-    if (el) el.textContent = `Generated ${frames.length} frames (${(frames.length / 125).toFixed(2)}s)`;
-    toast(`Script → ${frames.length} frames`);
+    if (inputs.length) loadFrames(framesFromRun(inputs, replay), { simulated: true, keepCamera: true });
+    const vel = replay.velocities, v = vel.at(-1);
+    const jumps = vel.filter((u, i) => u.z > 200 && (i === 0 || vel[i - 1].z <= 200)).length;   // jump frames leave with vz 264
+    const summary = inputs.length
+        ? `${inputs.length} frames (${(inputs.length / 125).toFixed(2)} s) · ${jumps} jumps · ${Math.round(Math.hypot(v.x, v.y))} ups${raceSummary(V.currentRace)}`
+        : 'no frames';
+    if (el) {
+        el.textContent = error ? `Error, ${error} (${summary} before it)` : summary;
+        el.style.color = error ? '#ff6b6b' : '#aaa';
+    }
+    toast(error ? 'Script error' : `Script → ${inputs.length} frames`);
 }
 
 // ═══════════════════════════════════════════════════════════════════════
 //  Optimizer integration
 // ═══════════════════════════════════════════════════════════════════════
-async function runOptimizer() {
-    if (!V.optimizer) { toast('Physics engine not available'); return; }
-    if (!V.waypointSystem || V.waypointSystem.waypoints.length < 2) { toast('Place at least 2 waypoints'); return; }
 
-    const algo = document.getElementById('optimizerAlgo')?.value || 'de';
-    const maxFrames = parseInt(document.getElementById('optimizerMaxFrames')?.value) || 250;
-    const targetJumps = parseInt(document.getElementById('optimizerTargetJumps')?.value) || 3;
-    const iters = parseInt(document.getElementById('optimizerIters')?.value) || 60;
+// Runs the search in a throwaway worker (own WASM instance) so it can't freeze
+// the UI. Cancel asks the worker to stop; it still returns the best route so far.
+function optimizeInWorker(job, onProgress, cancelBtn) {
+    const worker = new Worker(new URL('./optimizer-worker.js', import.meta.url));
+    cancelBtn.onclick = () => worker.postMessage({ type: 'cancel' });
+    return new Promise((resolve, reject) => {
+        worker.onmessage = ({ data }) => {
+            if (data.type === 'progress') onProgress(data);
+            else if (data.type === 'done') resolve(data);
+            else if (data.type === 'error') reject(new Error(data.message));
+        };
+        worker.onerror = e => reject(new Error(e.message || 'Optimizer worker failed to load'));
+        worker.postMessage({ type: 'run', ...job });
+    }).finally(() => worker.terminate());
+}
+
+async function runOptimizer() {
+    if (!V.physicsReady) { toast('Physics engine not available'); return; }
+    // Start where a script starts in game: the map spawn, landed. No spawn: waypoint 1.
+    // With DeFRaG timer triggers the route can end in the stop trigger, and it's ranked by race time.
+    const spawn = mapSpawn();
+    const triggers = V.timerTriggers ?? { start: [], checkpoints: [], stop: [] };
+    const finish = !!spawn && triggers.stop.length > 0 && !!document.getElementById('optFinish')?.checked;
+    const minWps = finish ? 0 : spawn ? 1 : 2;
+    if (!V.waypointSystem || V.waypointSystem.waypoints.length < minWps) {
+        toast(spawn ? 'Place at least 1 waypoint (or tick "Finish in the stop trigger")' : 'No spawn in this map: place at least 2 waypoints');
+        return;
+    }
 
     const statusEl = document.getElementById('optimizerStatus');
     const fillEl = document.getElementById('optimizerProgressFill');
@@ -530,41 +546,46 @@ async function runOptimizer() {
 
     runBtn.style.display = 'none';
     cancelBtn.style.display = '';
-    cancelBtn.onclick = () => V.optimizer.cancel();
 
     if (statusEl) statusEl.textContent = 'Running…';
     if (fillEl) fillEl.style.width = '0%';
 
     try {
-        const inputs = await V.optimizer.optimizeFullRoute(
-            V.waypointSystem.waypoints,
-            algo,
-            { maxFrames, targetJumps, generations: iters, maxEvals: iters * 10 },
-            (seg, totalSeg, step, total, score) => {
+        const nWps = V.waypointSystem.waypoints.length;
+        const { inputs, replay, jumps, reached, totalSeg, first, cancelled } = await optimizeInWorker(
+            {
+                // Plain copies: live waypoints reference THREE meshes, which can't be cloned to a worker.
+                waypoints: V.waypointSystem.waypoints.map(w => ({ position: w.position, radius: w.radius })),
+                spawn,
+                race: triggers.start.length || triggers.stop.length ? { ...triggers, finish } : null,
+                rawBsp: V.currentMapData?.rawBsp
+            },
+            ({ seg, totalSeg, wp, step, total }) => {
                 const pct = ((seg / totalSeg) + (step / total / totalSeg)) * 100;
                 if (fillEl) fillEl.style.width = pct.toFixed(1) + '%';
-                if (statusEl) statusEl.textContent = `Seg ${seg+1}/${totalSeg} step ${step}/${total} score=${score?.toFixed(1) ?? '?'}`;
-            }
+                if (statusEl) statusEl.textContent = `${wp === 'finish' ? 'Stop trigger' : `Waypoint ${wp}/${nWps}`} · candidate ${step}/${total}`;
+            },
+            cancelBtn
         );
+        if (!inputs.length) {
+            const target = first > nWps ? 'The stop trigger' : `Waypoint ${first}`;
+            if (statusEl) statusEl.textContent = cancelled ? 'Cancelled'
+                : `${target} unreachable from ${first === 1 ? 'the spawn' : 'waypoint 1'}`;
+            return;
+        }
 
-        if (statusEl) statusEl.textContent = `Done — ${inputs.length} frames`;
+        // The worker's continuous replay from the start is the optimized path.
+        const frames = framesFromRun(inputs, replay);
+        loadFrames(frames, { simulated: true, keepCamera: true });
+        const ups = Math.round(frames.at(-1).speed);
+        const summary = `${frames.length} frames · ${jumps} jumps · ${ups} ups${raceSummary(V.currentRace)}`;
+        if (statusEl) statusEl.textContent = reached < totalSeg
+            ? `Reached ${reached}/${totalSeg} targets${cancelled ? ' (cancelled)' : ''} — ${summary}`
+            : `Done — ${summary}`;
         if (fillEl) fillEl.style.width = '100%';
-
-        // Convert optimizer inputs → frame data via WASM simulation
-        const spawn = findFirstSpawn(V.currentMapData?.bsp?.entities);
-        const spawnOrigin = spawn ? bspLoader.parseOrigin(spawn.properties.origin) : [0, 0, 0];
-        const result = V.optimizer.simulateRoute(spawnOrigin, [0,0,0], 0, inputs);
-        // Frame convention: x = Q3_X, y = -Q3_Y (Three.js Z), z = Q3_Z (Three.js Y)
-        const frames = result.positions.map((p, i) => ({
-            frame: i, x: p.x, y: -p.y, z: p.z,
-            speed: 0, yawDeg: 0, onGround: true,
-            forwardMove: inputs[i]?.fwd * 127 || 0,
-            rightMove: inputs[i]?.str * 127 || 0,
-            upMove: inputs[i]?.jump ? 200 : 0,
-            buttons: inputs[i]?.jump ? 2 : 0
-        }));
-        loadFrames(frames);
-        toast(`Optimizer → ${frames.length} frames`);
+        V.lastRoute = inputs;
+        document.getElementById('btnExportRoute').style.display = '';
+        toast(`Optimizer → ${summary}`);
     } catch (e) {
         console.error('[v2] Optimizer failed', e);
         if (statusEl) statusEl.textContent = 'Error: ' + e.message;
@@ -617,7 +638,8 @@ function showFrameEditorUI() {
         const lt = document.getElementById('chkLeft').checked, rt = document.getElementById('chkRight').checked;
         const yaw = parseFloat(document.getElementById('yawSlider').value) || 0;
         const jump = document.getElementById('jumpCheck').checked;
-        return { forwardMove: fwd && !bk ? 127 : (!fwd && bk ? -127 : 0), rightMove: rt && !lt ? 127 : (!rt && lt ? -127 : 0), upMove: jump ? 200 : 0, angles: [0, yaw, 0], buttons: jump ? 2 : 0 };
+        // Jump = upmove 10 (PM_CheckJump's minimum, full wishspeed; what cl_scriptRun sends), no buttons
+        return { forwardMove: fwd && !bk ? 127 : (!fwd && bk ? -127 : 0), rightMove: rt && !lt ? 127 : (!rt && lt ? -127 : 0), upMove: jump ? 10 : 0, angles: [0, yaw, 0], buttons: 0 };
     };
     const count = () => { const v = parseInt(document.getElementById('frameCountInput').value); return Math.max(1, Math.min(200, isFinite(v) ? v : 1)); };
 
@@ -627,7 +649,9 @@ function showFrameEditorUI() {
     document.getElementById('btnDeleteFrame').addEventListener('click', () => { V.frameEditor.deleteFrame(V.currentFrame); updateEditorViz(); });
     document.getElementById('btnUndo').addEventListener('click', () => { V.frameEditor.undo(); updateEditorViz(); });
     document.getElementById('btnRedo').addEventListener('click', () => { V.frameEditor.redo(); updateEditorViz(); });
-    document.getElementById('btnExportCfg').addEventListener('click', () => downloadFile('movement.cfg', V.frameEditor.exportToCfg()));
+    // Baked: the editor frames' exact moves and yaw shorts, replayed from the landed spawn like in game
+    document.getElementById('btnExportCfg').addEventListener('click', () =>
+        exportToStatus(null, () => exportBaked(V.frameEditor.toInputs(), exportOpts('editor'))));
     document.getElementById('btnExportJSON').addEventListener('click', () => downloadFile('movement.json', V.frameEditor.exportToJSON()));
 }
 
@@ -635,11 +659,12 @@ function updateEditorViz() {
     // FrameEditor stores Q3 coords; convert to frame convention: y = -Q3_Y
     const frames = V.frameEditor.frames.map(f => ({
         frame: f.index, x: f.stateAfter.pos.x, y: -f.stateAfter.pos.y, z: f.stateAfter.pos.z,
-        speed: Math.sqrt(f.stateAfter.vel.x**2 + f.stateAfter.vel.y**2 + f.stateAfter.vel.z**2),
+        vx: f.stateAfter.vel.x, vy: f.stateAfter.vel.y,
+        speed: Math.hypot(f.stateAfter.vel.x, f.stateAfter.vel.y),
         yawDeg: f.stateAfter.angles.yaw, onGround: f.stateAfter.onGround,
         forwardMove: f.input.forwardMove, rightMove: f.input.rightMove, upMove: f.input.upMove, buttons: f.input.buttons
     }));
-    loadFrames(frames);
+    loadFrames(frames, { simulated: true, keepCamera: true });
     const fc = document.getElementById('feFrameCount'); if (fc) fc.textContent = frames.length;
     const ms = document.getElementById('feMaxSpeed'); if (ms) ms.textContent = (frames.reduce((m,f) => Math.max(m, f.speed), 0)).toFixed(1) + ' ups';
 }
@@ -740,15 +765,35 @@ function setupViewerControls() {
         if (V.isWaypointMode) V.renderer.domElement.style.cursor = 'crosshair';
         else V.renderer.domElement.style.cursor = '';
     });
-    V.renderer?.domElement?.addEventListener('click', e => { if (V.isWaypointMode && V.waypointSystem) V.waypointSystem.handleClick(e, V.camera); });
+    // Waypoint mode: a quick click without moving places (left) or deletes (middle) a waypoint;
+    // holding or dragging is left to the camera controls.
+    const canvas = V.renderer?.domElement;
+    let press = null;
+    canvas?.addEventListener('pointerdown', e => { press = { x: e.clientX, y: e.clientY, t: performance.now(), button: e.button }; });
+    canvas?.addEventListener('mousedown', e => { if (e.button === 1 && V.isWaypointMode) e.preventDefault(); });   // no middle-click autoscroll
+    const isClick = e => press && press.button === e.button && performance.now() - press.t < 300
+        && Math.hypot(e.clientX - press.x, e.clientY - press.y) < 5;
+    const showWaypointCount = () => {
+        const el = document.getElementById('waypointTotal');
+        if (el) el.textContent = V.waypointSystem?.waypoints.length ?? 0;
+    };
+    canvas?.addEventListener('click', e => {
+        if (V.isWaypointMode && V.waypointSystem && isClick(e) && V.waypointSystem.handleClick(e, V.camera)) showWaypointCount();
+    });
+    canvas?.addEventListener('auxclick', e => {
+        if (e.button !== 1 || !V.isWaypointMode || !V.waypointSystem || !isClick(e)) return;
+        const i = V.waypointSystem.deleteAt(e, V.camera);
+        if (i >= 0) { showWaypointCount(); toast(`Waypoint ${i + 1} deleted`); }
+    });
     document.getElementById('btnResetWaypoints')?.addEventListener('click', () => V.waypointSystem?.resetWaypoints());
-    document.getElementById('btnClearWaypoints')?.addEventListener('click', () => V.waypointSystem?.clearAllWaypoints());
+    document.getElementById('btnClearWaypoints')?.addEventListener('click', () => { V.waypointSystem?.clearAllWaypoints(); showWaypointCount(); });
     document.getElementById('btnExportWaypoints')?.addEventListener('click', () => { if (V.waypointSystem) downloadFile('waypoints.json', V.waypointSystem.exportToJSON()); });
     document.getElementById('btnImportWaypoints')?.addEventListener('click', () => document.getElementById('waypointImportInput')?.click());
     document.getElementById('waypointImportInput')?.addEventListener('change', async e => {
         if (e.target.files[0] && V.waypointSystem) {
             const text = await e.target.files[0].text();
             V.waypointSystem.importFromJSON(text);
+            showWaypointCount();
         }
         e.target.value = '';
     });
@@ -757,9 +802,24 @@ function setupViewerControls() {
     document.getElementById('btnScriptEditor')?.addEventListener('click', toggleScriptEditor);
     document.getElementById('btnRunScript')?.addEventListener('click', handleScriptRun);
     document.getElementById('btnClearScript')?.addEventListener('click', () => { const ta = document.getElementById('scriptTextArea'); if (ta) ta.value = ''; });
+    const scriptText = () => document.getElementById('scriptTextArea')?.value?.trim() ? document.getElementById('scriptTextArea').value : null;
+    const scriptStatusEl = () => document.getElementById('scriptStatus');
     document.getElementById('btnExportScript')?.addEventListener('click', () => {
-        const text = document.getElementById('scriptTextArea')?.value;
-        if (text) downloadFile('movement.cfg', text);
+        const text = scriptText();
+        if (!text) { toast('Script is empty'); return; }
+        exportToStatus(scriptStatusEl(), () => exportScript(text, exportOpts('script')));
+    });
+    document.getElementById('btnExportScriptBaked')?.addEventListener('click', () => {
+        const text = scriptText();
+        if (!text) { toast('Script is empty'); return; }
+        exportToStatus(scriptStatusEl(), () => {
+            const opts = exportOpts('baked'), run = runScript(text, opts.Q3, opts.spawn);
+            return run.error ? { files: [], run } : exportBaked(run.inputs, opts);
+        });
+    });
+    document.getElementById('btnExportRoute')?.addEventListener('click', () => {
+        if (!V.lastRoute?.length) { toast('Run the optimizer first'); return; }
+        exportToStatus(document.getElementById('optimizerStatus'), () => exportBaked(V.lastRoute, exportOpts('route')));
     });
 
     // Optimizer
@@ -793,6 +853,11 @@ function setupViewerControls() {
             case 'F':
                 if (V.isFlyMode) V.flyControls.unlock();
                 else V.flyControls.lock();
+                break;
+            case 'Enter':
+                // Enter already activates a focused button/select; don't also grab the mouse.
+                if (e.target.tagName === 'BUTTON' || e.target.tagName === 'SELECT') break;
+                if (!V.isFlyMode) V.flyControls.lock();
                 break;
         }
     });

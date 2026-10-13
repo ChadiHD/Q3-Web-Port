@@ -23,9 +23,9 @@ typedef struct {
     int serverTime;
     int forwardmove;   // -127 to 127
     int rightmove;     // -127 to 127
-    int upmove;        // 0 or 200
+    int upmove;        // -127 to 127 (127 = jump, -127 = crouch)
     float angles[3];   // pitch, yaw, roll
-    int buttons;       // BUTTON_JUMP = 2
+    int buttons;       // BUTTON_* bits; 0 for movement (2 = BUTTON_TALK freezes it)
 } JSUserCmd;
 
 // Forward-declare the stubs defined in browser_stubs.c
@@ -75,6 +75,8 @@ void InitPhysics() {
     ps.pm_type = PM_NORMAL;
     ps.gravity = 800;
     ps.speed = 320;
+    // Alive: PM_UpdateViewAngles skips (no yaw quantization) when health <= 0
+    ps.stats[STAT_HEALTH] = 100;
 
     // Wire up the trace/pointcontents callbacks so Pmove doesn't call NULL
     pm.trace = PM_Trace;
@@ -114,8 +116,8 @@ void StepPhysics(
     float* angles,     // [pitch, yaw, roll]
     int forwardmove,   // -127 to 127
     int rightmove,     // -127 to 127
-    int upmove,        // 0 or 200
-    int buttons,       // 2 = jump
+    int upmove,        // -127 to 127 (127 = jump)
+    int buttons,       // BUTTON_* bits, 0 for movement
     float frametime    // 0.008 for 125 FPS
 ) {
     // Setup player state
@@ -157,6 +159,12 @@ void StepPhysics(
 EMSCRIPTEN_KEEPALIVE
 int IsPlayerOnGround() {
     return ps.groundEntityNum != ENTITYNUM_NONE;
+}
+
+// pm_flags after the last frame (PMF_JUMP_HELD = 2): the engine bots read it from the snapshot
+EMSCRIPTEN_KEEPALIVE
+int GetPmFlags() {
+    return ps.pm_flags;
 }
 
 // Get horizontal speed

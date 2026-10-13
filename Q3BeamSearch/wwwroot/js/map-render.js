@@ -5,7 +5,10 @@
 import * as THREE from 'three';
 import { V } from './viewer-state.js';
 import { bspLoader } from './bsp-loader.js';
-import { q3YawToThree } from './q3-math.js';
+import { findTimerTriggers } from './race-timer.js';
+
+// Marker meshes point along +X; rotation.y = θ turns them to Q3 yaw θ, because Three's
+// Z axis is -Q3 Y (Q3 → Three: (x, z, -y)).
 
 export function renderMap(mapData) {
     if (V.mapMesh) {
@@ -30,7 +33,8 @@ export function renderMap(mapData) {
         V.scene.background = hasSky ? new THREE.Color(0x87CEEB) : new THREE.Color(0x111111);
     }
 
-    if (mapData.bsp.entities) createEntityObjects(mapData.bsp.entities);
+    V.timerTriggers = findTimerTriggers(mapData.bsp);
+    if (mapData.bsp.entities) createEntityObjects(mapData.bsp);
 
     // Default camera: top-down on first spawn (criterion 3)
     const spawn = findFirstSpawn(mapData.bsp.entities);
@@ -69,8 +73,10 @@ export function findFirstSpawn(entities) {
     return entities.find(e => e.properties.classname === 'info_player_deathmatch' || e.properties.classname === 'info_player_start');
 }
 
-function createEntityObjects(entities) {
+function createEntityObjects(bsp) {
     clearEntityObjects();
+    const entities = bsp.entities;
+    const targets = new Map(entities.filter(e => e.properties.targetname).map(e => [e.properties.targetname, e.properties.classname]));
     const cats = { players: 0, triggers: 0, items: 0, lights: 0, other: 0 };
     for (const e of entities) {
         const c = e.properties.classname || '';
@@ -81,7 +87,7 @@ function createEntityObjects(entities) {
         if (c.includes('info_player') || c.includes('info_spectator')) {
             createSpawnPoint(pos, ang, c); cats.players++;
         } else if (c.startsWith('trigger_')) {
-            createTrigger(pos, e, c); cats.triggers++;
+            createTrigger(pos, e, c, bsp, targets.get(e.properties.target)); cats.triggers++;
         } else if (/^item_|^weapon_|^ammo_/.test(c)) {
             createItem(pos, c); cats.items++;
         } else if (c.includes('light')) { cats.lights++; }
@@ -99,14 +105,24 @@ function createSpawnPoint(pos, angle, classname) {
     const arrow = new THREE.Mesh(new THREE.ConeGeometry(6, 20, 8), new THREE.MeshPhongMaterial({ color: 0xffff00 }));
     arrow.position.set(0, 30, 0);
     arrow.rotation.z = -Math.PI/2;
-    arrow.rotation.y = q3YawToThree(angle);
+    arrow.rotation.y = angle;
     g.add(arrow);
     g.position.copy(pos);
     V.spawnObjects.push(g); V.scene.add(g);
 }
-function createTrigger(pos, entity, classname) {
-    const m = new THREE.Mesh(new THREE.BoxGeometry(32,32,32), new THREE.MeshBasicMaterial({ color: 0xffff00, wireframe: true, transparent: true, opacity: 0.5 }));
-    m.position.copy(pos); m.userData = { type: 'trigger', classname, entity };
+// Brush triggers ("model" "*N") have no origin: draw their brush model's bounds. DeFRaG timer
+// triggers by what they target: start green, stop red, checkpoint blue; others yellow.
+const TRIGGER_COLORS = { target_startTimer: 0x00ff66, target_stopTimer: 0xff3333, target_checkpoint: 0x33aaff };
+function createTrigger(pos, entity, classname, bsp, targetClass) {
+    const model = entity.properties.model?.startsWith('*') ? bsp.models?.[parseInt(entity.properties.model.slice(1), 10)] : null;
+    const size = model ? [0, 1, 2].map(k => Math.max(1, model.maxs[k] - model.mins[k])) : [32, 32, 32];
+    const m = new THREE.Mesh(new THREE.BoxGeometry(size[0], size[2], size[1]),
+        new THREE.MeshBasicMaterial({ color: TRIGGER_COLORS[targetClass] ?? 0xffff00, wireframe: true, transparent: true, opacity: 0.6 }));
+    if (model) {
+        const c = [0, 1, 2].map(k => (model.mins[k] + model.maxs[k]) / 2);
+        m.position.set(c[0], c[2], -c[1]);
+    } else m.position.copy(pos);
+    m.userData = { type: 'trigger', classname, entity, timer: targetClass };
     V.triggerObjects.push(m); V.scene.add(m);
 }
 function createItem(pos, classname) {

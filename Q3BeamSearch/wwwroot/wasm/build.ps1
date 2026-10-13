@@ -1,5 +1,18 @@
 ﻿# Build oDFe WebAssembly
+#   ./build.ps1                      (emcc already on PATH, or EMSDK set)
+#   ./build.ps1 -Emsdk C:\path\emsdk (activates that emsdk for this run)
+param([string]$Emsdk = $env:EMSDK)
 
+if (-not (Get-Command emcc -ErrorAction SilentlyContinue)) {
+    if (-not $Emsdk -or -not (Test-Path (Join-Path $Emsdk "emsdk_env.ps1"))) {
+        Write-Host "emcc not found: pass -Emsdk <path to emsdk> or run emsdk_env.ps1 first" -ForegroundColor Red
+        exit 1
+    }
+    $env:EMSDK_QUIET = 1
+    & (Join-Path $Emsdk "emsdk_env.ps1")
+}
+
+Push-Location $PSScriptRoot
 Write-Host "Building oDFe WebAssembly..."
 
 # Ensure output directory exists
@@ -27,7 +40,7 @@ $sources = @(
 
 # Exported functions — StepPhysics replaces PmoveSingle.
 # LoadCollisionMap / HasCollisionMap added for the CM world-loading path.
-$exportedFunctions = '["_InitPhysics","_StepPhysics","_IsPlayerOnGround","_GetHorizontalSpeed","_SetPlayerSpeed","_SetGravity","_GetPlayerPosition","_GetPlayerVelocity","_GetPlayerAngles","_SimulateFrames","_LoadCollisionMap","_HasCollisionMap","_malloc","_free"]'
+$exportedFunctions = '["_InitPhysics","_StepPhysics","_IsPlayerOnGround","_GetPmFlags","_GetHorizontalSpeed","_SetPlayerSpeed","_SetGravity","_GetPlayerPosition","_GetPlayerVelocity","_GetPlayerAngles","_SimulateFrames","_LoadCollisionMap","_HasCollisionMap","_malloc","_free"]'
 $exportedRuntimeMethods = '["ccall","cwrap","getValue","setValue","HEAPF32","HEAP32","HEAPU8"]'
 
 # Build command arguments
@@ -39,7 +52,8 @@ $emccArgs = @(
     "-s", "EXPORTED_RUNTIME_METHODS=$exportedRuntimeMethods"
     "-s", "MODULARIZE=1"
     "-s", "EXPORT_NAME=Q3PhysicsModule"
-    "-s", "ENVIRONMENT=web"
+    # worker: the waypoint optimizer loads it in a Web Worker
+    "-s", "ENVIRONMENT=web,worker"
     "-s", "SINGLE_FILE=0"
     # 256 MB: the collision model reserves a 64 MB hunk for map data on top of
     # the physics working set. ALLOW_MEMORY_GROWTH is on, so this is a ceiling.
@@ -47,7 +61,7 @@ $emccArgs = @(
     "-s", "ASSERTIONS=0"
     "-s", "NO_FILESYSTEM=1"
     "-msimd128"
-    "-ffast-math"
+    # No -ffast-math: physics must round exactly like the game's float math
     "-I", "src/odfe"
     "-I", "src/cm"
     "-D", "GAME_INCLUDE"
@@ -82,8 +96,10 @@ if ($LASTEXITCODE -eq 0) {
     Copy-Item "output/q3physics.js" -Destination "$jsDir/q3physics.js" -Force
     Copy-Item "output/q3physics.wasm" -Destination "$jsDir/q3physics.wasm" -Force
     Write-Host "Copied to wwwroot/js/" -ForegroundColor Green
+    Pop-Location
 }
 else {
     Write-Host "Build failed!" -ForegroundColor Red
+    Pop-Location
     exit 1
 }

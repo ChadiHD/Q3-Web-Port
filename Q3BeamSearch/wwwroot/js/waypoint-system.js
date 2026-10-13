@@ -79,6 +79,7 @@ export class WaypointSystem {
 
         // Position the group
         group.position.set(waypoint.position.x, waypoint.position.z, waypoint.position.y);
+        group.updateMatrixWorld(true);   // pickable (deleteAt) before the next render
         group.userData = { waypoint: waypoint };
 
         this.waypointMarkers.push(group);
@@ -231,17 +232,30 @@ export class WaypointSystem {
         this.currentWaypoint = 0;
     }
 
-    // Handle mouse click for waypoint placement/selection
-    handleClick(event, camera) {
-        if (!this.isEditMode) return null;
-
-        // Calculate mouse position in normalized device coordinates
+    _aim(event, camera) {
+        // Mouse position in normalized device coordinates, then a ray from the camera
         const rect = event.target.getBoundingClientRect();
         this.mouse.x = ((event.clientX - rect.left) / rect.width) * 2 - 1;
         this.mouse.y = -((event.clientY - rect.top) / rect.height) * 2 + 1;
-
-        // Raycast from camera
         this.raycaster.setFromCamera(this.mouse, camera);
+    }
+
+    // Delete the waypoint under the mouse (the nearest one the ray hits). Returns its index or -1.
+    deleteAt(event, camera) {
+        if (!this.isEditMode || !this.waypointMarkers.length) return -1;
+        this._aim(event, camera);
+        const hit = this.raycaster.intersectObjects(this.waypointMarkers, true)[0];
+        let group = hit?.object;
+        while (group && !group.userData?.waypoint) group = group.parent;
+        const index = group ? this.waypoints.indexOf(group.userData.waypoint) : -1;
+        if (index >= 0) this.deleteWaypoint(index);
+        return index;
+    }
+
+    // Handle mouse click for waypoint placement/selection
+    handleClick(event, camera) {
+        if (!this.isEditMode) return null;
+        this._aim(event, camera);
 
         // Check intersection with map
         if (this.map) {

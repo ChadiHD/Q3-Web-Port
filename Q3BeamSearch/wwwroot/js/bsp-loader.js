@@ -6,6 +6,8 @@ import * as THREE from 'three';
 import JSZip from 'jszip';
 import { decodeTGA, imageDataToCanvas } from './tga-decoder.js';
 
+const mapNameOf = path => path.split('/').pop().replace(/\.bsp$/i, '');
+
 export const bspLoader = {
     async loadMapFromFile(file) {
         const fn = file.name.toLowerCase();
@@ -35,13 +37,14 @@ export const bspLoader = {
         console.log(`[skybox] worldspawn sky='${wsSky}', BSP sky entry='${skyBspEntry?.name}'`);
         const skyTexture = skySearchName ? await this.loadSkyboxFromPK3(zip, skySearchName) : null;
         // rawBsp: the untouched .bsp bytes, forwarded to the WASM collision model.
-        return { type: 'pk3', bsp, textures, skyTexture, rawBsp: buf };
+        // mapName: what `devmap` takes (maps/<name>.bsp).
+        return { type: 'pk3', bsp, textures, skyTexture, rawBsp: buf, mapName: mapNameOf(bspEntry.name) };
     },
 
     async loadBSP(file) {
         const buf = await file.arrayBuffer();
         // rawBsp: the untouched .bsp bytes, forwarded to the WASM collision model.
-        return { type: 'bsp', bsp: this.parseBSP(buf), textures: new Map(), rawBsp: buf };
+        return { type: 'bsp', bsp: this.parseBSP(buf), textures: new Map(), rawBsp: buf, mapName: mapNameOf(file.name) };
     },
 
     async loadTexturesFromPK3(zip) {

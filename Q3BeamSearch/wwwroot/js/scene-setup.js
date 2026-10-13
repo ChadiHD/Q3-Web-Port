@@ -7,7 +7,6 @@ import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { PointerLockControls } from 'three/addons/controls/PointerLockControls.js';
 import { FrameEditor } from './frame-editor.js';
 import { WaypointSystem } from './waypoint-system.js';
-import { WaypointOptimizer } from './waypoint-optimizer.js';
 import { V } from './viewer-state.js';
 import { toast } from './ui-utils.js';
 
@@ -55,11 +54,6 @@ export function initThreeJS() {
         V.controls.update();
     });
 
-    // Click on the 3D canvas to enter fly mode
-    V.renderer.domElement.addEventListener('click', () => {
-        if (!V.isFlyMode) V.flyControls.lock();
-    });
-
     V.ambientLight = new THREE.AmbientLight(0x404040, 0.6);
     V.scene.add(V.ambientLight);
     V.directionalLight = new THREE.DirectionalLight(0xffffff, 0.8);
@@ -86,7 +80,6 @@ export function initThreeJS() {
     if (V.physicsReady) {
         V.frameEditor = new FrameEditor(V.Q3Physics);
         V.frameEditor.setCollisionSystem(V.collisionSystem.isReady() ? V.collisionSystem : null);
-        V.optimizer = new WaypointOptimizer(V.Q3Physics);
     }
     V.waypointSystem = new WaypointSystem(V.scene, V.mapMesh);
 }

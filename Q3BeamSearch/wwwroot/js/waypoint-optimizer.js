@@ -1,318 +1,213 @@
 // wwwroot/js/waypoint-optimizer.js
-// Route optimizer: JS search algorithms calling q3physics.wasm for physics
-// Ported from Q3BeamSearch.Console Program.cs (DE + A* algorithms)
+// VQ3 TAS route optimizer. Physics is the real oDFe Pmove in q3physics.wasm.
+//
+// Every frame a strafe controller holds forward + strafe and picks the yaw short whose
+// ROUNDED velocity scores best (strafe.js: Pmove snaps velocity every frame, so this beats
+// the continuous CGaz angle), steering toward the next waypoint and bunnyhopping on the
+// first frame back on the ground (a frame-perfect jump skips ground friction). Jump frames
+// send upmove 10, the least PM_CheckJump accepts, so PM_CmdScale barely lowers that
+// frame's wishspeed (319.5 instead of 261.3 at upmove 127). A beam search over a few
+// controller settings per waypoint picks the route by TAS criteria:
+//   all waypoints reached > fewest frames > highest final speed > fewest jumps.
+// The route starts where a script would in game: at the map spawn, landed and at rest.
+// On a map with DeFRaG timer triggers it can finish in the stop trigger, and "frames" means
+// race frames: from the last frame in the start trigger (frames spent there are free).
+// Pure VQ3: no air wishspeed cap (that is Q1 / CPM behaviour).
+
+import { bestYaw, shortToYaw } from './strafe.js';
+import { PmoveRunner } from './pmove-runner.js';
+import { touches, boxCenter, raceTime } from './race-timer.js';
+
+// VQ3 constants (bg_pmove.c, wrapper.c InitPhysics defaults)
+const DT = 0.008;                      // 125 fps
+const SPEED = 320;                     // ps.speed
+const ACCEL = 10, AIR_ACCEL = 1;       // pm_accelerate, pm_airaccelerate
+const FRICTION = 6, STOP_SPEED = 100;  // pm_friction, pm_stopspeed
+const KEY = 127;                       // usercmd moves are signed chars
+const JUMP_UP = 10;                    // jump-frame upmove: PM_CheckJump needs >= 10
+const JUMP_WISH = SPEED * Math.hypot(KEY, KEY) / Math.hypot(KEY, KEY, JUMP_UP); // PM_CmdScale, ~319.5
+const STAND = 24;                      // player origin height above the floor (bbox mins z)
+const REACH_DZ = 96;                   // a waypoint is a cylinder: its radius across, ±96 vertically (a full hop)
+
+// Search space. Every combination is simulated, so nothing has to be chosen by hand.
+//   turn:       λ in strafe.bestYaw's score (1-λ)·speed + λ·progress toward the waypoint;
+//               0 = speed only, 1 = turn toward the waypoint as hard as pays off
+//   groundTurn: skip the bunnyhop and turn on the ground while heading error exceeds this
+//   cut:        aim this fraction of the radius toward the following waypoint (corner cutting)
+//   prestrafe:  ground frames before the first jump (first leg only)
+const TURNS = [0, 0.3, 1];
+const GROUND_TURNS = [Math.PI / 3, (2 * Math.PI) / 3, Infinity];
+const CUTS = [0, 0.8];
+const combos = prestrafes => TURNS.flatMap(turn => GROUND_TURNS.flatMap(groundTurn =>
+    CUTS.flatMap(cut => prestrafes.map(prestrafe => ({ turn, groundTurn, cut, prestrafe })))));
+const FIRST_LEG = combos([0, 8, 16, 24]), LEG = combos([0]);
+const BEAM = 4;  // ponytail: greedy per-leg beam; widen if routes with sharp turns come out poor
+
+const wrap = a => Math.atan2(Math.sin(a), Math.cos(a));          // radians to (-pi, pi]
+const toShort = rad => ((Math.round(rad * 65536 / (2 * Math.PI)) % 65536) + 65536) % 65536;
+const hspeed = v => Math.hypot(v[0], v[1]);
+// A waypoint is reached inside its cylinder; a trigger target ({box}) when the player touches it.
+const reached = (pos, wp) => wp.box ? touches(wp.box, pos)
+    : Math.hypot(pos[0] - wp.x, pos[1] - wp.y) <= wp.r && Math.abs(pos[2] - wp.z) <= REACH_DZ;
+
+// Frames that count: after the last frame in a start trigger, if one was touched.
+const counted = node => (node.timerStart >= 0 ? node.inputs.length - 1 - node.timerStart : node.inputs.length);
+
+// Beam order: frames so far + time to cover the rest of the route at the current speed.
+// After the last waypoint this is just the frame count, i.e. the TAS order.
+function estimate(node, wps, seg) {
+    let rest = 0, x = node.pos[0], y = node.pos[1];
+    for (let i = seg + 1; i < wps.length; i++) {
+        rest += Math.hypot(wps[i].x - x, wps[i].y - y);
+        x = wps[i].x; y = wps[i].y;
+    }
+    return counted(node) + rest / Math.max(hspeed(node.vel), SPEED) / DT;
+}
 
 export class WaypointOptimizer {
     constructor(Q3) {
-        this.Q3 = Q3;
-        this.DT = 0.008;       // 125 FPS
-        this.FPS = 125;
+        this.sim = new PmoveRunner(Q3);
         this._cancelled = false;
     }
 
     cancel() { this._cancelled = true; }
 
-    // ??? Simulate N frames through real oDFe Pmove ?????????????????????
-    simulateRoute(startPos, startVel, startYaw, inputs) {
-        const Q3 = this.Q3;
-        const posPtr = Q3._malloc(12);
-        const velPtr = Q3._malloc(12);
-        const angPtr = Q3._malloc(12);
+    // One frame of input: forward + strafe, the yaw short strafe.bestYaw scores best
+    // (speed, or speed blended with progress toward the aim point, per p.turn), and a jump
+    // on the first ground frame. `margin`: how close to the aim point counts as inside.
+    _control(st, aim, margin, p, frame) {
+        const sp = hspeed(st.vel);
+        const bearing = Math.atan2(aim[1] - st.pos[1], aim[0] - st.pos[0]);
+        const velAng = sp < 1 ? bearing : Math.atan2(st.vel[1], st.vel[0]);
+        const phi = wrap(bearing - velAng);
+        const side = phi >= 0 ? 1 : -1;                  // +1 = turn left (counter-clockwise)
 
-        Q3.HEAPF32.set(startPos, posPtr >> 2);
-        Q3.HEAPF32.set(startVel, velPtr >> 2);
-        Q3.HEAPF32.set([0, startYaw, 0], angPtr >> 2);
+        // Would even a full-strength air turn (wish 90° off velocity) miss the waypoint?
+        // That turn's radius is v²·dt / a = v² / 320; if the aim point sits inside the
+        // circle by more than `margin`, slow down on the ground instead of hopping.
+        const R = sp * sp / (AIR_ACCEL * SPEED);
+        const cx = st.pos[0] - side * Math.sin(velAng) * R, cy = st.pos[1] + side * Math.cos(velAng) * R;
+        const brake = R - Math.hypot(aim[0] - cx, aim[1] - cy) > margin;
+        const jump = st.onGround && frame >= p.prestrafe && Math.abs(phi) <= p.groundTurn && !brake;
+        const keys = { f: KEY, s: -side * KEY, u: jump ? JUMP_UP : 0 };
+        const mode = jump ? 'jump' : st.onGround ? 'ground' : 'air';
 
-        let maxSpeed = 0, jumps = 0, onGroundPrev = true;
-        const positions = [];
-        const velocities = [];
+        let yawShort = null;
+        if (!brake) {
+            // Below the CGaz threshold every angle up to ~90° gets full accel, so
+            // heading straight for the aim point costs no speed: score progress only.
+            const wish = jump ? JUMP_WISH : SPEED, accel = mode === 'ground' ? ACCEL : AIR_ACCEL;
+            const vf = mode === 'ground' ? Math.max(0, sp - Math.max(sp, STOP_SPEED) * FRICTION * DT) : sp;
+            const lambda = vf <= wish - accel * DT * wish ? 1 : p.turn;
+            const r = bestYaw({ vel: st.vel, mode }, keys, side, { aim: [Math.cos(bearing), Math.sin(bearing)], lambda });
+            if (r) yawShort = r.yawShort;
+        }
+        if (yawShort === null) {
+            // Braking (ground: aim at it, friction tightens the turn; air: turn hardest),
+            // or standing still: wish straight at the aim point.
+            const want = Math.min(Math.abs(phi), Math.PI / 2);
+            const d = brake && !st.onGround ? Math.PI / 2 : want;
+            // Forward + left strafe puts the wish direction 45° left of the view, right strafe 45° right.
+            yawShort = toShort(velAng + side * d - side * Math.PI / 4);
+        }
+        return { ...keys, yawShort, yaw: shortToYaw(yawShort) };
+    }
 
+    // Aim point: the waypoint centre, or `cut` of its radius toward the following waypoint.
+    _aim(wp, next, cut) {
+        if (!next || !cut) return [wp.x, wp.y];
+        const dx = next.x - wp.x, dy = next.y - wp.y, l = Math.hypot(dx, dy) || 1;
+        return [wp.x + dx / l * cut * wp.r, wp.y + dy / l * cut * wp.r];
+    }
+
+    // Replay `node` from the start, then drive the controller to waypoint `seg`.
+    // Returns the extended node, or null if the waypoint isn't reached within the cap.
+    _extend(start, node, wps, seg, p) {
+        const st = this.sim.reset(start);
+        for (const inp of node.inputs) this.sim.step(st, inp);
+        const wp = wps[seg], aim = this._aim(wp, wps[seg + 1], p.cut);
+        const inputs = node.inputs.slice();
+        let jumps = node.jumps, timerStart = node.timerStart;
+        // ponytail: cap = 2.5x the straight-line time at ground speed + 1 s; raise if long curving legs time out
+        const cap = inputs.length + Math.ceil(2.5 * Math.hypot(wp.x - st.pos[0], wp.y - st.pos[1], wp.z - st.pos[2]) / SPEED / DT) + 125;
+        const margin = (1 - p.cut) * wp.r;   // aim is cut·r off centre, so this much slack still lands inside
+        while (inputs.length < cap) {
+            const inp = this._control(st, aim, margin, p, inputs.length);
+            this.sim.step(st, inp);
+            inputs.push(inp);
+            if (inp.u) jumps++;
+            if (this.startBoxes.some(b => touches(b, st.pos))) timerStart = inputs.length - 1;
+            if (reached(st.pos, wp)) return { inputs, jumps, timerStart, pos: [...st.pos], vel: [...st.vel] };
+        }
+        return null;
+    }
+
+    // One continuous run of the chosen inputs: the exact path to display.
+    _replay(start, inputs) {
+        const st = this.sim.reset(start);
+        const positions = [], velocities = [], onGround = [];
         for (const inp of inputs) {
-            Q3.ccall('StepPhysics', null,
-                ['number','number','number','number','number','number','number','number'],
-                [posPtr, velPtr, angPtr,
-                 inp.fwd * 127, inp.str * 127, inp.jump ? 200 : 0,
-                 inp.jump ? 2 : 0, this.DT]);
-
-            const p = Q3.HEAPF32.subarray(posPtr >> 2, (posPtr >> 2) + 3);
-            const v = Q3.HEAPF32.subarray(velPtr >> 2, (velPtr >> 2) + 3);
-            const speed = Math.sqrt(v[0]*v[0] + v[1]*v[1]);
-            if (speed > maxSpeed) maxSpeed = speed;
-
-            const onGround = Q3.ccall('IsPlayerOnGround','number',[],[]) === 1;
-            if (onGroundPrev && !onGround) jumps++;
-            onGroundPrev = onGround;
-
-            positions.push({ x: p[0], y: p[1], z: p[2] });
-            velocities.push({ x: v[0], y: v[1], z: v[2] });
+            this.sim.step(st, inp);
+            positions.push({ x: st.pos[0], y: st.pos[1], z: st.pos[2] });
+            velocities.push({ x: st.vel[0], y: st.vel[1], z: st.vel[2] });
+            onGround.push(st.onGround);
         }
-
-        // Read final state before freeing
-        const finalVel = [
-            Q3.HEAPF32[(velPtr >> 2)],
-            Q3.HEAPF32[(velPtr >> 2) + 1],
-            Q3.HEAPF32[(velPtr >> 2) + 2]
-        ];
-        const finalYaw = Q3.HEAPF32[(angPtr >> 2) + 1];
-
-        Q3._free(posPtr);
-        Q3._free(velPtr);
-        Q3._free(angPtr);
-
-        return { positions, velocities, maxSpeed, jumps, finalVel, finalYaw };
+        return { positions, velocities, onGround };
     }
 
-    // ??? Fitness: score a candidate toward a target waypoint ???????????
-    evaluateCandidate(startPos, startVel, startYaw, inputs, targetPos, targetRadius) {
-        const result = this.simulateRoute(startPos, startVel, startYaw, inputs);
-        const positions = result.positions;
-
-        let reachedFrame = -1;
-        for (let i = 0; i < positions.length; i++) {
-            const dx = positions[i].x - targetPos.x;
-            const dy = positions[i].y - targetPos.y;
-            const dz = positions[i].z - targetPos.z;
-            if (Math.sqrt(dx*dx + dy*dy + dz*dz) <= targetRadius) {
-                reachedFrame = i;
-                break;
-            }
-        }
-
-        let score = 0;
-        if (reachedFrame >= 0) {
-            score += 100000;
-            score -= reachedFrame * 10;     // prefer fewer frames
-            score += result.maxSpeed * 0.5; // speed bonus
-        } else {
-            let minDist = Infinity;
-            for (const p of positions) {
-                const dx = p.x - targetPos.x;
-                const dy = p.y - targetPos.y;
-                const dz = p.z - targetPos.z;
-                const d = Math.sqrt(dx*dx + dy*dy + dz*dz);
-                if (d < minDist) minDist = d;
-            }
-            score = -minDist;
-        }
-        return { score, result, reachedFrame };
-    }
-
-    // ??? Differential Evolution (ported from Program.cs) ??????????????
-    async optimizeSegmentDE(startPos, startVel, startYaw, targetPos, targetRadius, maxFrames, options = {}, onProgress) {
-        const {
-            popSize = 30,
-            generations = 60,
-            F = 0.5,
-            CR = 0.7,
-        } = options;
+    // Waypoints in viewer convention (y = -Q3_Y), clicked on the floor. With `spawn`
+    // ({origin: Q3 [x, y, z]}) the route starts at that spawn, landed, and every waypoint is
+    // a target; without one it starts standing on waypoint 1. `race` ({start, stop} trigger
+    // boxes from race-timer.js, finish: bool) ranks by race frames and, with finish, ends the
+    // route in the stop trigger nearest the last waypoint. Cancel stops after the current
+    // candidate and returns the best route so far.
+    async optimizeRoute(waypoints, onProgress, spawn = null, race = null) {
         this._cancelled = false;
-
-        const numParams = maxFrames * 2;
-        const population = [];
-        const scores = [];
-
-        // Init population
-        for (let i = 0; i < popSize; i++) {
-            const ind = new Float64Array(numParams);
-            for (let f = 0; f < maxFrames; f++) {
-                ind[f*2]     = Math.random() * 2 - 1;
-                ind[f*2 + 1] = (f % (12 + (i + f) % 6) === 0) ? 1 : 0;
-            }
-            population.push(ind);
-            const inputs = this._paramsToInputs(ind, maxFrames);
-            scores.push(this.evaluateCandidate(startPos, startVel, startYaw, inputs, targetPos, targetRadius).score);
+        this.startBoxes = race?.start ?? [];
+        const all = waypoints.map(w => ({ x: w.position.x, y: -w.position.y, z: w.position.z, r: w.radius }));
+        const start = spawn ? this.sim.settle(spawn.origin) : { pos: [all[0].x, all[0].y, all[0].z + STAND], onGround: false };
+        // wps[0] is the start; legs go to wps[1..]
+        const wps = spawn ? [{ x: start.pos[0], y: start.pos[1], z: start.pos[2] - STAND, r: 0 }, ...all] : all;
+        if (race?.finish && race.stop?.length) {
+            const last = wps.at(-1), d = b => { const c = boxCenter(b); return Math.hypot(c[0] - last.x, c[1] - last.y, c[2] - last.z); };
+            const box = race.stop.reduce((a, b) => (d(b) < d(a) ? b : a));
+            const [x, y, z] = boxCenter(box);
+            wps.push({ x, y, z, r: 0, box });
         }
+        const first = spawn ? 1 : 2;            // user waypoint number of the first target
+        const totalSeg = wps.length - 1;
+        let beam = [{ inputs: [], jumps: 0, timerStart: -1, pos: start.pos, vel: [0, 0, 0] }];
+        let done = 0;
 
-        let bestIdx = scores.indexOf(Math.max(...scores));
-
-        for (let gen = 0; gen < generations; gen++) {
-            if (this._cancelled) break;
-
-            for (let i = 0; i < popSize; i++) {
-                let a, b, c;
-                do { a = (Math.random() * popSize) | 0; } while (a === i);
-                do { b = (Math.random() * popSize) | 0; } while (b === i || b === a);
-                do { c = (Math.random() * popSize) | 0; } while (c === i || c === a || c === b);
-
-                const trial = new Float64Array(numParams);
-                const jrand = (Math.random() * numParams) | 0;
-                for (let j = 0; j < numParams; j++) {
-                    if (Math.random() < CR || j === jrand) {
-                        trial[j] = population[a][j] + F * (population[b][j] - population[c][j]);
-                    } else {
-                        trial[j] = population[i][j];
+        for (let seg = 1; seg <= totalSeg; seg++) {
+            const grid = seg === 1 ? FIRST_LEG : LEG;
+            const total = beam.length * grid.length;
+            const seen = new Map();   // identical routes from different settings collapse here
+            let step = 0;
+            search: for (const node of beam) {
+                for (const p of grid) {
+                    if (this._cancelled) break search;
+                    const child = this._extend(start, node, wps, seg, p);
+                    if (child) seen.set(`${child.inputs.length}|${child.pos.map(c => c.toFixed(2))}`, child);
+                    if (++step % 8 === 0) {   // report, and let a 'cancel' message in
+                        onProgress?.({ seg: seg - 1, totalSeg, wp: wps[seg].box ? 'finish' : first + seg - 1, step, total });
+                        await new Promise(r => setTimeout(r, 0));
                     }
-                    if (j % 2 === 0) trial[j] = Math.max(-1, Math.min(1, trial[j]));
-                    else trial[j] = Math.max(0, Math.min(1, trial[j]));
-                }
-
-                const inputs = this._paramsToInputs(trial, maxFrames);
-                const { score } = this.evaluateCandidate(startPos, startVel, startYaw, inputs, targetPos, targetRadius);
-                if (score > scores[i]) {
-                    population[i] = trial;
-                    scores[i] = score;
                 }
             }
-
-            bestIdx = scores.indexOf(Math.max(...scores));
-            if (onProgress) onProgress(gen, generations, scores[bestIdx]);
-
-            // Yield to event loop every 5 generations so UI stays responsive
-            if (gen % 5 === 0) await new Promise(r => setTimeout(r, 0));
+            if (seen.size) {
+                const est = new Map([...seen.values()].map(n => [n, estimate(n, wps, seg)]));
+                beam = [...seen.values()]
+                    .sort((a, b) => est.get(a) - est.get(b) || hspeed(b.vel) - hspeed(a.vel) || a.jumps - b.jumps)
+                    .slice(0, BEAM);
+                done = seg;
+            }
+            if (!seen.size || this._cancelled) break;
         }
 
-        const bestInputs = this._paramsToInputs(population[bestIdx], maxFrames);
-        return {
-            inputs: bestInputs,
-            score: scores[bestIdx],
-            result: this.simulateRoute(startPos, startVel, startYaw, bestInputs)
-        };
-    }
-
-    // ??? A* segment planner (simplified from Program.cs PatternSearch) ?
-    async optimizeSegmentAStar(startPos, startVel, startYaw, targetPos, targetRadius, maxFrames, options = {}, onProgress) {
-        const { maxEvals = 500, segmentLen = 12 } = options;
-        this._cancelled = false;
-
-        const open = [];
-        const push = (n) => { open.push(n); open.sort((a,b) => a.f - b.f); };
-
-        const heuristic = (pos) => {
-            const dx = pos[0] - targetPos.x;
-            const dy = pos[1] - targetPos.y;
-            const dz = pos[2] - targetPos.z;
-            return Math.sqrt(dx*dx + dy*dy + dz*dz);
-        };
-
-        const startNode = {
-            pos: [...startPos], vel: [...startVel], yaw: startYaw,
-            frame: 0, g: 0, h: heuristic(startPos),
-            get f() { return this.g + this.h; },
-            inputs: []
-        };
-        push(startNode);
-
-        let bestNode = startNode;
-        let evals = 0;
-
-        while (open.length > 0 && evals < maxEvals) {
-            if (this._cancelled) break;
-            const node = open.shift();
-            evals++;
-
-            const dist = heuristic(node.pos);
-            if (dist <= targetRadius) {
-                return {
-                    inputs: node.inputs,
-                    score: 100000 - node.frame * 10,
-                    result: this.simulateRoute(startPos, startVel, startYaw, node.inputs),
-                    reachedFrame: node.frame
-                };
-            }
-
-            if (node.frame >= maxFrames) continue;
-            if (dist < heuristic(bestNode.pos)) bestNode = node;
-
-            for (const str of [-1, 1]) {
-                for (const jump of [false, true]) {
-                    const segInputs = [];
-                    for (let t = 0; t < segmentLen && (node.frame + t) < maxFrames; t++) {
-                        segInputs.push({ fwd: 1, str, jump: jump && t === 0, yawDelta: 0 });
-                    }
-
-                    const result = this.simulateRoute(node.pos, node.vel, node.yaw, segInputs);
-                    const last = result.positions[result.positions.length - 1];
-                    const lastVel = result.finalVel;
-                    const endFrame = node.frame + segInputs.length;
-
-                    push({
-                        pos: [last.x, last.y, last.z],
-                        vel: lastVel,
-                        yaw: result.finalYaw,
-                        frame: endFrame,
-                        g: node.g + segInputs.length,
-                        h: heuristic([last.x, last.y, last.z]),
-                        get f() { return this.g + this.h; },
-                        inputs: [...node.inputs, ...segInputs]
-                    });
-                }
-            }
-
-            if (evals % 20 === 0) {
-                if (onProgress) onProgress(evals, maxEvals, -heuristic(bestNode.pos));
-                await new Promise(r => setTimeout(r, 0));
-            }
-        }
-
-        const bestInputs = bestNode.inputs;
-        return {
-            inputs: bestInputs,
-            score: -heuristic(bestNode.pos),
-            result: this.simulateRoute(startPos, startVel, startYaw, bestInputs),
-            reachedFrame: -1
-        };
-    }
-
-    // ??? Multi-segment: optimize each waypoint-to-waypoint pair ????????
-    async optimizeFullRoute(waypoints, algo, options, onSegmentProgress) {
-        this._cancelled = false;
-        const allInputs = [];
-        // Waypoint positions use viewer convention: x = Q3_X, y = -Q3_Y, z = Q3_Z.
-        // Convert to Q3 coords for physics: Q3_Y = -wp.y
-        let pos = [waypoints[0].position.x, -waypoints[0].position.y, waypoints[0].position.z];
-        let vel = [0, 0, 0];
-        let yaw = 0;
-
-        for (let i = 0; i < waypoints.length - 1; i++) {
-            if (this._cancelled) break;
-            const from = waypoints[i];
-            const to = waypoints[i + 1];
-
-            // Convert target to Q3 coords
-            const targetPos = { x: to.position.x, y: -to.position.y, z: to.position.z };
-            const dx = targetPos.x - pos[0];
-            const dy = targetPos.y - pos[1];
-            yaw = Math.atan2(dy, dx) * (180 / Math.PI);
-
-            const dist = Math.sqrt(dx*dx + dy*dy + (targetPos.z - pos[2])**2);
-            const maxFrames = Math.min(options.maxFrames || 250, Math.max(60, Math.ceil(dist / 2)));
-
-            const onProgress = (step, total, score) => {
-                if (onSegmentProgress) onSegmentProgress(i, waypoints.length - 1, step, total, score);
-            };
-
-            let result;
-            if (algo === 'astar') {
-                result = await this.optimizeSegmentAStar(pos, vel, yaw, targetPos, to.radius, maxFrames, options, onProgress);
-            } else {
-                result = await this.optimizeSegmentDE(pos, vel, yaw, targetPos, to.radius, maxFrames, options, onProgress);
-            }
-
-            allInputs.push(...result.inputs);
-
-            // Carry over end state
-            if (result.result.positions.length > 0) {
-                const last = result.result.positions[result.result.positions.length - 1];
-                pos = [last.x, last.y, last.z];
-                vel = result.result.finalVel;
-                yaw = result.result.finalYaw;
-            }
-        }
-
-        return allInputs;
-    }
-
-    // ??? Convert param vector ? input array ????????????????????????????
-    _paramsToInputs(params, frames) {
-        const inputs = [];
-        for (let i = 0; i < frames && i * 2 + 1 < params.length; i++) {
-            inputs.push({
-                fwd: 1,
-                str: params[i*2] >= 0 ? 1 : -1,
-                jump: params[i*2 + 1] > 0.5,
-                yawDelta: 0
-            });
-        }
-        return inputs;
+        const best = beam[0], replay = this._replay(start, best.inputs);
+        return { inputs: best.inputs, jumps: best.jumps, reached: done, totalSeg, first,
+                 finish: !!wps.at(-1).box, start: start.pos, cancelled: this._cancelled, replay,
+                 race: race ? raceTime(replay.positions, race) : null };
     }
 }

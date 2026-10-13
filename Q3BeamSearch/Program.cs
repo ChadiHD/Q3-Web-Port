@@ -30,6 +30,10 @@ namespace Q3BeamSearch
             var app = builder.Build();
 
             app.UseCors();
+
+            // The site opens on the v2 viewer (the legacy page stays at /index.html).
+            // A redirect, not a rewrite, so the page's relative ../js/ paths resolve.
+            app.MapGet("/", () => Results.Redirect("/html/viewer3d-v2.html"));
             app.UseDefaultFiles();
 
             var provider = new FileExtensionContentTypeProvider();

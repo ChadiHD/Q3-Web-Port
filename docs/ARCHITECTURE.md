@@ -76,12 +76,20 @@ WASM physics. The console app is not part of the web request path.
 | `bsp-loader.js` | Parses `.bsp` / `.pk3` (via JSZip) into geometry + entities; extracts textures & skybox; also returns the **raw BSP bytes** (`rawBsp`) for the WASM collision model. |
 | `collision-detection.js` | A pure-JS BSP box-trace (`BSPCollisionSystem`). Used for the demo-replay post-pass; superseded for live physics by the WASM collision model. |
 | `slide-move.js` | Q3-style slide/clip-velocity helper used by the JS collision post-pass. |
-| `waypoint-system.js` | Waypoint placement / import-export. |
-| `waypoint-optimizer.js` | DE and A* route optimisers; call the WASM physics per candidate. |
+| `waypoint-system.js` | Waypoint placement (left click), deletion (middle click), import / export. |
+| `waypoint-optimizer.js` | VQ3 route optimiser: a strafe controller plus a beam search, on the WASM physics. It runs in `optimizer-worker.js`. With DeFRaG timer triggers it can finish in the stop trigger and ranks by race time. |
+| `strafe.js` | Snap-aware yaw chooser: a bit-exact one-frame Pmove model, searched over yaw shorts. Its C twin is oDFe `cl_snapyaw.c`. |
+| `pmove-runner.js` | Steps the WASM Pmove one usercmd at a time (`reset`, `step`, `settle` at the spawn). |
+| `movement-script.js` | Runs cfg movement scripts exactly like the modified oDFe (`docs/SCRIPTING.md`). |
+| `cfg-export.js` | cfg exports for oDFe: as written, or baked per frame with checkpoints. |
+| `race-timer.js` | DeFRaG start / checkpoint / stop triggers (brush bounds) and the race time of a run. |
 | `scene-setup.js` | Three.js renderer/camera/lights bootstrap. |
-| `map-render.js` | Builds the Three.js meshes from parsed BSP + categorises entities. |
+| `map-render.js` | Builds the Three.js meshes from parsed BSP and the entity markers; triggers at their brush bounds, timer triggers coloured. |
 | `frame-editor.js` | Frame-by-frame input editing. |
-| `q3-math.js`, `viewer-state.js`, `ui-utils.js`, `tga-decoder.js` | Small shared helpers (coordinate conversion, global `V` state object, DOM helpers, TGA image decode). |
+| `viewer-state.js`, `ui-utils.js`, `tga-decoder.js` | Small shared helpers: the global `V` state object, DOM helpers, TGA image decode. |
+
+Directions: a marker or arrow that points along +X with `rotation.y = θ` points at Q3 yaw θ, because Three's Z is −Q3 Y
+(Q3 → Three: (x, z, −y)). Viewer frames store y as −Q3 y. `vx` / `vy`, when present, are the Q3 Pmove velocity.
 
 ## Data flow (v2, loading a map and moving)
 

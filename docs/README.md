@@ -17,6 +17,9 @@ behind the significant changes, primarily for future maintainers and AI assistan
 | [BUILD.md](./BUILD.md) | How to build the WASM module and run the web app. |
 | [AI_GUIDE.md](./AI_GUIDE.md) | Conventions, environment gotchas, and a task-oriented map of "where do I change X". **Read this first if you are an AI assistant working in this repo.** |
 | [CHANGELOG.md](./CHANGELOG.md) | A dated record of notable work (code review findings, the collision-model port). |
+| [SCRIPTING.md](./SCRIPTING.md) | The movement-script language shared by the viewer's script editor and the modified oDFe (`exec`), its bots (`+snapbot`, `+strafebot`, `+autojump`), `setyaw` and `cl_scriptRun`. |
+| [BOT_PLAN.md](./BOT_PLAN.md) | The project's own bot and script plan: snap-accurate VQ3 strafing, cfg scripts shared by the web tool and modified oDFe, with status and the old bots' bugs. |
+| [ERBOT_ANALYSIS.md](./ERBOT_ANALYSIS.md) | Reverse-engineering notes on erbot ("Edge Runner"), an older closed-source bot: its formulas, snap tables and tricks, compared with our plan, and how to repeat the analysis. |
 
 ## One-paragraph summary of the project
 
