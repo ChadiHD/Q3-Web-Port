@@ -9,6 +9,8 @@
 //     (+autojump / +snapbot / +strafebot from the previous frame's result), then the cmd
 //     yaw is ANGLE2SHORT(script yaw). The mouse is ignored.
 //   - The run starts at the map spawn, landed, facing the spawn angle.
+//   - cpm: CPM physics (DeFRaG df_promode 1) for Pmove and the bots; `scriptphysics vq3|cpm`
+//     (exports start with it) must match it.
 
 import { bestYaw, cgazYaw, shortToYaw } from './strafe.js';
 import { PmoveRunner } from './pmove-runner.js';
@@ -70,8 +72,8 @@ const atoi = s => parseInt(s, 10) || 0;
 // Runs `text` from the spawn ({origin: Q3 [x, y, z], angle: degrees}, or null: origin 0).
 // Returns {inputs: [{f, s, u, yaw, yawShort}], replay: {positions, velocities, onGround},
 // start, error}. On an error the frames up to it are still returned.
-export function runScript(text, Q3, spawn = null) {
-    const sim = new PmoveRunner(Q3);
+export function runScript(text, Q3, spawn = null, cpm = false) {
+    const sim = new PmoveRunner(Q3, cpm);
     const start = sim.settle(spawn ? spawn.origin : [0, 0, 0]);
     const st = sim.reset(start);
     const keys = Object.fromEntries(KEYS.map(k => [k, false]));
@@ -118,7 +120,7 @@ export function runScript(text, Q3, spawn = null) {
             if (side) {
                 const mode = !st.onGround ? 'air' : canJump && up >= 10 ? 'jump' : 'ground';
                 const pick = keys.snapbot ? bestYaw : cgazYaw;
-                const r = pick({ vel: st.vel, mode }, { f: fwd, s: side, u: up }, side < 0 ? 1 : -1);
+                const r = pick({ vel: st.vel, mode, cpm }, { f: fwd, s: side, u: up }, side < 0 ? 1 : -1);
                 if (r) yaw = f(shortToYaw(r.yawShort));
             }
         }
@@ -164,6 +166,12 @@ export function runScript(text, Q3, spawn = null) {
             if (args.length !== 2) throw new ScriptError(line, 'usage: setyaw <degrees>');
             const s = Math.floor((parseFloat(args[1]) || 0) * 65536 / 360 + 0.5) & 0xffff;
             yaw = f(shortToYaw(s));
+        } else if (cmd === 'scriptphysics') {
+            const want = (args[1] ?? '').toLowerCase();
+            if (args.length !== 2 || (want !== 'vq3' && want !== 'cpm')) throw new ScriptError(line, 'usage: scriptphysics <vq3|cpm>');
+            if ((want === 'cpm') !== cpm) throw new ScriptError(line, `the script is for ${want.toUpperCase()}: switch Physics to ${want.toUpperCase()}`);
+        } else if (cmd === 'df_promode' || (/^set[asu]?$/.test(cmd) && args[1]?.toLowerCase() === 'df_promode')) {
+            throw new ScriptError(line, 'df_promode only changes with the map: pick VQ3 or CPM in the Physics menu (exports add scriptphysics)');
         } else if (cmd === 'set' || cmd === 'seta' || cmd === 'sets' || cmd === 'setu') {
             if (args.length < 3) throw new ScriptError(line, `usage: ${cmd} <variable> <value>`);
             setCvar(args[1], args.slice(2).join(' '));

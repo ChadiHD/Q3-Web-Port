@@ -21,11 +21,29 @@ What the script does:
    what the viewer loads.
 
 Key `emcc` settings (in `build.ps1`): `MODULARIZE=1`, `EXPORT_NAME=Q3PhysicsModule`,
-`ENVIRONMENT=web`, `NO_FILESYSTEM=1`, `ALLOW_MEMORY_GROWTH=1`, `TOTAL_MEMORY=268435456`
-(256 MB), `-O3 -msimd128 -ffast-math`.
+`ENVIRONMENT=web,worker` (the optimizer runs it in Web Workers), `NO_FILESYSTEM=1`,
+`ALLOW_MEMORY_GROWTH=1`, `TOTAL_MEMORY=268435456` (256 MB), `-O3 -msimd128`. **No
+`-ffast-math`:** the physics and the yaw chooser must round exactly like the game's float math.
 
 If you add a new exported C function, add its underscore-prefixed name to
 `EXPORTED_FUNCTIONS` in `build.ps1` (e.g. `_LoadCollisionMap`).
+
+The module also contains the route optimizer's yaw chooser, `src/odfe/cl_snapyaw.c` (export
+`SnapYaw`). It is the C twin of `wwwroot/js/strafe.js` and a byte-identical copy of the oDFe
+engine's `code/client/cl_snapyaw.c`: keep the two C copies identical.
+
+### Node build and the chooser parity check
+
+`./build.ps1 -NodeOut <dir>` builds the same sources for Node into `<dir>` (`q3physics.cjs` +
+`.wasm`) and leaves `wwwroot` alone. Then:
+
+```powershell
+node tests/snapyaw-wasm.check.mjs <dir>/q3physics.cjs
+```
+
+It checks that the C chooser picks the same yaw short and velocity as `strafe.js` on 30,000
+random frames (VQ3 + CPM, air / ground / jump, with and without aim). Without a Node build the
+check skips. Run it after any change to `cl_snapyaw.c` or `strafe.js`.
 
 ### Validating C changes without emcc / a browser
 

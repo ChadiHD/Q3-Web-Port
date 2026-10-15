@@ -1,6 +1,6 @@
 // Self-check for the snap-aware yaw chooser. Run: node tests/strafe.check.mjs
 // The one-frame model itself was checked bit-exact against q3physics.wasm
-// (60k random air / ground / jump frames); this checks the search.
+// (VQ3 and CPM, 140k random air / ground / jump frames); this checks the search.
 import assert from 'node:assert/strict';
 import { bestYaw, simulate, rint } from '../Q3BeamSearch/wwwroot/js/strafe.js';
 
@@ -26,12 +26,12 @@ function brute(state, keys, side, score) {
     return best;
 }
 
-const KEYS = [{ f: 127, s: -127 }, { f: 127, s: 127 }, { f: 127, s: 0 }, { f: 0, s: -127 }];
+const KEYS = [{ f: 127, s: -127 }, { f: 127, s: 127 }, { f: 127, s: 0 }, { f: 0, s: -127 }];   // CPM: f or s alone change the rules
 let cases = 0, evals = 0;
-for (const [mode, vmax, u] of [['air', 1400, 0], ['air', 900, 127], ['jump', 900, 127], ['ground', 450, 0]]) {
+for (const cpm of [false, true]) for (const [mode, vmax, u] of [['air', 1400, 0], ['air', 900, 127], ['jump', 900, 127], ['ground', 450, 0]]) {
     for (let i = 0; i < 24; i++) {
         const sp = 20 + rand() * vmax, th = rand() * 2 * Math.PI;   // below ~5 ups ground friction stops you: null
-        const state = { vel: [Math.round(sp * Math.cos(th)), Math.round(sp * Math.sin(th)), 0], mode };
+        const state = { vel: [Math.round(sp * Math.cos(th)), Math.round(sp * Math.sin(th)), 0], mode, cpm };
         const keys = { ...KEYS[i % KEYS.length], u }, side = i % 2 ? 1 : -1;
         const a = rand() * 2 * Math.PI, aim = [Math.cos(a), Math.sin(a)], lambda = [0, 0.3, 1][i % 3];
         const score = o => (1 - lambda) * Math.hypot(o[0], o[1]) + lambda * (o[0] * aim[0] + o[1] * aim[1]);
@@ -42,7 +42,7 @@ for (const [mode, vmax, u] of [['air', 1400, 0], ['air', 900, 127], ['jump', 900
         assert.ok(d >= -SH && d <= Math.PI + SH, `${mode}: chose the wrong side (δ=${d})`);
         const want = brute(state, keys, side, score);
         assert.ok(score(r.vel) >= want - 1e-9,
-            `${mode} vel=${state.vel} keys=${JSON.stringify(keys)} side=${side} λ=${lambda}: chooser ${score(r.vel)} < brute ${want}`);
+            `${cpm ? 'cpm ' : ''}${mode} vel=${state.vel} keys=${JSON.stringify(keys)} side=${side} λ=${lambda}: chooser ${score(r.vel)} < brute ${want}`);
         cases++; evals += r.evals;
     }
 }
@@ -55,3 +55,11 @@ const cgaz = Math.acos((320 - 2.56) / 600) - Math.PI / 4;   // W+A: wish is 45°
 const cg = simulate(state, keys, Math.round(cgaz / SH) & 0xffff), snap = bestYaw(state, keys, 1).vel;
 assert.ok(Math.hypot(...snap) > Math.hypot(...cg), `best snap ${snap} should beat CGaz ${cg}`);
 console.log(`ok 600 ups: CGaz ${cg} = ${Math.hypot(...cg).toFixed(4)}, best snap ${snap} = ${Math.hypot(...snap).toFixed(4)}`);
+
+// CPM: ground accel 15 (VQ3 10); strafe keys alone in the air add up to 70·0.008·30 = 16.8 ups a frame, sideways
+const run = (cpm, mode, k, vel) => simulate({ vel, mode, cpm }, { u: 0, ...k }, 0);
+assert.deepEqual([run(false, 'ground', { f: 127, s: 0 }, [0, 0, 0]), run(true, 'ground', { f: 127, s: 0 }, [0, 0, 0])], [[26, 0], [38, 0]]);
+assert.deepEqual(run(true, 'air', { f: 0, s: -127 }, [0, 600, 0]), [0, 600], 'left strafe at yaw 0 wishes along +y: no gain past 30 ups');
+const side = bestYaw({ vel: [600, 0, 0], mode: 'air', cpm: true }, { f: 0, s: -127, u: 0 }, 1).vel;
+assert.ok(Math.atan2(side[1], side[0]) > 0.02 && Math.hypot(...side) > 600, `A alone turns ~1.6° a frame and gains speed: ${side}`);
+console.log(`ok cpm: ground accel 15, A alone at 600 ups turns ${(Math.atan2(side[1], side[0]) * 180 / Math.PI).toFixed(2)}° to ${side}`);

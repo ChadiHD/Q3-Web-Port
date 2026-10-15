@@ -77,9 +77,9 @@ WASM physics. The console app is not part of the web request path.
 | `collision-detection.js` | A pure-JS BSP box-trace (`BSPCollisionSystem`). Used for the demo-replay post-pass; superseded for live physics by the WASM collision model. |
 | `slide-move.js` | Q3-style slide/clip-velocity helper used by the JS collision post-pass. |
 | `waypoint-system.js` | Waypoint placement (left click), deletion (middle click), import / export. |
-| `waypoint-optimizer.js` | VQ3 route optimiser: a strafe controller plus a beam search, on the WASM physics. It runs in `optimizer-worker.js`. With DeFRaG timer triggers it can finish in the stop trigger and ranks by race time. |
-| `strafe.js` | Snap-aware yaw chooser: a bit-exact one-frame Pmove model, searched over yaw shorts. Its C twin is oDFe `cl_snapyaw.c`. |
-| `pmove-runner.js` | Steps the WASM Pmove one usercmd at a time (`reset`, `step`, `settle` at the spawn). |
+| `waypoint-optimizer.js` | VQ3 / CPM route optimiser: a strafe controller plus a beam search, on the WASM physics. It runs in `optimizer-worker.js`, which also starts a pool of helper workers (one per core minus one, up to 16), each with its own WASM instance and map. They simulate each leg's candidates in parallel, and the results are merged in job order, so the route is the same as single-threaded. With DeFRaG timer triggers it can finish in the stop trigger and ranks by race time. In CPM it also tries one-key air frames (sidestrafe, air control). |
+| `strafe.js` | Snap-aware yaw chooser: a bit-exact one-frame Pmove model (VQ3 and CPM), searched over yaw shorts. Its C twin is `cl_snapyaw.c` (one file, in oDFe and in the WASM as `SnapYaw`); the optimizer runs the C one through `PmoveRunner.bestYaw`, the script runner and tests use this one, and `tests/snapyaw-wasm.check.mjs` keeps them picking alike. |
+| `pmove-runner.js` | Steps the WASM Pmove one usercmd at a time (`reset`, `step`, `settle` at the spawn), VQ3 or CPM (`SetPromode`). |
 | `movement-script.js` | Runs cfg movement scripts exactly like the modified oDFe (`docs/SCRIPTING.md`). |
 | `cfg-export.js` | cfg exports for oDFe: as written, or baked per frame with checkpoints. |
 | `race-timer.js` | DeFRaG start / checkpoint / stop triggers (brush bounds) and the race time of a run. |

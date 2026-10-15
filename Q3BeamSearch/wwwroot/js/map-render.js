@@ -47,10 +47,10 @@ export function renderMap(mapData) {
         V.camera.lookAt(pos);
         V.controls.target.copy(pos);
 
-        // Place playerSphere at spawn (same position as green cone)
-        if (V.playerSphere) {
-            V.playerSphere.position.copy(pos);
-            V.playerSphere.visible = true;
+        // Place playerBox at spawn (same position as green cone)
+        if (V.playerBox) {
+            V.playerBox.position.copy(pos);
+            V.playerBox.visible = true;
         }
 
         // Seed FrameEditor with Q3 spawn origin so physics starts here

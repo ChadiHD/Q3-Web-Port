@@ -251,8 +251,11 @@ void PM_StepSlideMove( qboolean gravity ) {
 	pm->trace (&trace, start_o, pm->mins, pm->maxs, down, pm->ps->clientNum, pm->tracemask);
 	VectorSet(up, 0, 0, 1);
 	// never step up when you still have up velocity
+	// (CPM: unless within the double-jump window and no faster than a double jump: stair climbing)
 	if ( pm->ps->velocity[2] > 0 && (trace.fraction == 1.0 ||
-										DotProduct(trace.plane.normal, up) < 0.7)) {
+										DotProduct(trace.plane.normal, up) < 0.7)
+		&& !( pm_promode && pm->cmd.serverTime - pm->ps->stats[STAT_CPM_LASTJUMP] < CPM_JUMP_WINDOW
+			&& pm->ps->velocity[2] <= JUMP_VELOCITY + CPM_DOUBLEJUMP ) ) {
 		return;
 	}
 

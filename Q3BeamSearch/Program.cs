@@ -41,7 +41,11 @@ namespace Q3BeamSearch
 
             app.UseStaticFiles(new StaticFileOptions
             {
-                ContentTypeProvider = provider
+                ContentTypeProvider = provider,
+                // The ES modules import each other without version tags. Without this the browser
+                // caches them heuristically (for days, from Last-Modified) and mixes old and new
+                // modules after an edit. no-cache = revalidate every load (cheap 304 via ETag).
+                OnPrepareResponse = ctx => ctx.Context.Response.Headers.CacheControl = "no-cache"
             });
 
             // Auto-convert CFG files from console app on startup

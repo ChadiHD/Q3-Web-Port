@@ -14,6 +14,12 @@ export const V = {
 
     // Playback
     currentFrames: [], currentFrame: 0, isPlaying: false, playbackFrame: null,
+    playDirection: 1,      // +1 forward, -1 backward: the last step button pressed
+
+    // Camera modes
+    followCam: true,       // orbit target stays on the player
+    isFirstPerson: false,  // camera at the player's eye, looking along the velocity
+    savedCam: null,        // orbit camera before first person, restored after
 
     // Map
     mapMesh: null, isWireframeMode: false, currentMapData: null, currentBrightness: 1.0,
@@ -22,7 +28,7 @@ export const V = {
     ambientLight: null, directionalLight: null,
 
     // 3D helpers
-    playerSphere: null, pathLine: null, pathGeometry: null, pathMaterial: null,
+    playerBox: null, pathLine: null, pathMaterial: null,
     velocityArrow: null, yawArrow: null, wishArrow: null, groundIndicator: null,
     gridHelper: null, axesHelper: null,
     trailPoints: [],
@@ -39,6 +45,7 @@ export const V = {
     isScriptEditorOpen: false,
     isOptimizerOpen: false,
     lastRoute: null,   // inputs of the last optimizer route, for its cfg export
+    cpm: false,        // physics: CPM (DeFRaG df_promode 1) instead of VQ3, from the Physics menu
     timerTriggers: null,   // DeFRaG start / checkpoint / stop trigger boxes (race-timer.js)
     currentRace: null,     // raceTime() of the loaded frames
 

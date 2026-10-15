@@ -41,11 +41,57 @@ wrapper.c             Emscripten entry points (StepPhysics, LoadCollisionMap, ..
 | `SimulateFrames(...)` | Batch simulate for the optimiser. |
 | `IsPlayerOnGround()`, `GetHorizontalSpeed()`, `GetPlayer*()` | Read state. |
 | `SetPlayerSpeed()`, `SetGravity()` | Tune parameters. |
+| `SetPromode(on)` | 0 = VQ3, 1 = CPM (DeFRaG `df_promode 1`), see [CPM](#cpm-defrag-df_promode-1). Kept across `InitPhysics`. |
 | `LoadCollisionMap(dataPtr, length)` | **Load a raw BSP buffer into the collision model.** |
 | `HasCollisionMap()` | Returns 1 once a world is loaded. |
 
 JS-side runtime methods exported: `ccall`, `cwrap`, `getValue`, `setValue`, `HEAPF32`,
 `HEAP32`, `HEAPU8`, plus `_malloc`/`_free`.
+
+## CPM (DeFRaG `df_promode 1`)
+
+DeFRaG is closed source, so CPM is rebuilt from two references in `Q3BeamSearch.Console/References/defrag`:
+- **Opensource Defrag** (`src/game/sgame/phy/q3a.c`, `core.c`, `slidemove.c`), a remake that aims to match DeFRaG 1:1;
+- the **proxymod HUD** constants (`src/game/cgame/hud/wip/bg_local.h`), reverse engineered from DeFRaG.
+
+`pm_promode` (set by `SetPromode`) switches these on in `bg_pmove.c` / `bg_slidemove.c`:
+
+| Where | VQ3 | CPM |
+|---|---|---|
+| Ground accel (`PM_WalkMove`) | 10 (slick / knockback: 1) | 15, slick and knockback too |
+| Air, strafe key alone | accel 1, wishspeed 320 | accel 70, wishspeed capped to 30 |
+| Air, accelerating against the velocity (wish · velocity < 0) | accel 1 | 2.5 |
+| Air, forward or back alone | accel 1 | accel 1, then air control: the velocity turns toward the wish direction by `k = 32 · 150 · dot² · frametime`, keeping its length (`PM_CPMAirControl`) |
+| Jump while moving up | vz = 270 | vz += 270 (ramp jump) |
+| Jump within 400 ms of the jump that opened the window | vz = 270 | +100 more (double jump); a double jump doesn't reopen the window |
+| Step up while moving up | never | allowed inside the window while vz ≤ 370 (stair climbing) |
+
+Friction, `PM_CmdScale`, gravity and snapping are the same in both.
+
+**Sources disagree on:**
+- **Air stop accel 2.5.** Opensource Defrag has it commented out. The proxymod HUD and CPMA have it, so the tool has it.
+- **Float order in air control.** Opensource Defrag computes `(4800 · dot²) · frametime`, CPMA `32 · ((150 · dot · dot) · frametime)`.
+  The tool follows Opensource Defrag. The results differ by an ulp at most, so a snapped velocity only changes when it
+  sits on a .5 boundary.
+- **Double-jump window.** Opensource Defrag keeps the window from the first jump, as the tool does. CPMA restarts it on
+  every jump.
+
+In game the checkpoints of a baked export (`docs/SCRIPTING.md`) show the first frame where DeFRaG differs.
+
+The window is `ps.stats[STAT_CPM_LASTJUMP]` (the last stat slot), holding the `cmd.serverTime` of the jump that opened
+it. `InitPhysics` sets it to −1000000, because `serverTime` starts near 0 here.
+
+Clients can tell CPM apart: DeFRaG sets `pm_flags` bit `0x8000` (`PMF_PROMODE`) in the snapshot. The proxymod HUD reads
+it, erbot reads it (see [ERBOT_ANALYSIS.md](./ERBOT_ANALYSIS.md)), and the modified oDFe's bots and `scriptphysics`
+read it too.
+
+**Verified:**
+- `strafe.js` CPM one-frame model = WASM, bit for bit: 140k random air / ground / jump frames, VQ3 and CPM, all key
+  combinations.
+- Jumps on dhoni:
+  - 264 after the jump frame;
+  - 364 for a second jump 96 or 392 ms later, 264 at 408 ms;
+  - a jump while moving up at 5 ups leaves at 269.
 
 ## The bug that was fixed (why collision "didn't work")
 

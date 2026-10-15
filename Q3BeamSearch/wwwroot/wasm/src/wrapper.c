@@ -7,6 +7,7 @@
 #define GAME_INCLUDE
 #include "odfe/q_shared.h"
 #include "odfe/bg_public.h"
+#include "odfe/cl_snapyaw.h"
 
 // Simplified structures for JavaScript interop
 typedef struct {
@@ -77,6 +78,8 @@ void InitPhysics() {
     ps.speed = 320;
     // Alive: PM_UpdateViewAngles skips (no yaw quantization) when health <= 0
     ps.stats[STAT_HEALTH] = 100;
+    // CPM: no double-jump window open at the start (cmd.serverTime starts near 0 here)
+    ps.stats[STAT_CPM_LASTJUMP] = -1000000;
 
     // Wire up the trace/pointcontents callbacks so Pmove doesn't call NULL
     pm.trace = PM_Trace;
@@ -172,6 +175,24 @@ EMSCRIPTEN_KEEPALIVE
 float GetHorizontalSpeed() {
     return sqrt(ps.velocity[0] * ps.velocity[0] +
                 ps.velocity[1] * ps.velocity[1]);
+}
+
+// Physics: 0 = VQ3, 1 = CPM (DeFRaG df_promode 1). Kept across InitPhysics.
+EMSCRIPTEN_KEEPALIVE
+void SetPromode(int on) {
+    pm_promode = on ? 1 : 0;
+}
+
+// The route optimizer's yaw chooser: cl_snapyaw.c, the C twin of strafe.js bestYaw (same
+// model, search and picks). mode: 0 air, 1 ground, 2 jump (snapMode_t). With useAim the score
+// is (1 - lambda)*speed + lambda*(velocity . (aimX, aimY)), else speed. Returns the yaw short,
+// or -1 when the yaw can't matter; out[0..1] = the snapped x/y velocity it gives.
+EMSCRIPTEN_KEEPALIVE
+int SnapYaw(float vx, float vy, float vz, int mode, int fmove, int smove, int upmove, int side, int cpm,
+            double aimX, double aimY, double lambda, int useAim, int *out) {
+    const float vel[3] = { vx, vy, vz };
+    const double aim[2] = { aimX, aimY };
+    return CL_SnapYawAim(vel, (snapMode_t)mode, fmove, smove, upmove, side, cpm, useAim ? aim : NULL, lambda, out);
 }
 
 // Set physics parameters

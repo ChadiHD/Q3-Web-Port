@@ -11,6 +11,7 @@
 //   6. This file replaces viewer3d.js
 
 import * as THREE from 'three';
+import { LineGeometry } from 'three/addons/lines/LineGeometry.js';
 import { PLAYER_PHYSICS_BOUNDS } from './collision-detection.js';
 import { bspLoader } from './bsp-loader.js';
 import { slideMove } from './slide-move.js';
@@ -32,6 +33,7 @@ async function initQ3Physics() {
         V.Q3Physics.ccall('InitPhysics', null, [], []);
         V.Q3Physics.ccall('SetPlayerSpeed', null, ['number'], [320]);
         V.Q3Physics.ccall('SetGravity', null, ['number'], [800]);
+        V.Q3Physics._SetPromode(V.cpm ? 1 : 0);
         V.physicsReady = true;
         console.log('[v2] oDFe WASM physics ready');
         // If a map was already loaded before physics finished initialising,
@@ -174,13 +176,13 @@ function transitionToViewer() {
     }
 
     // Reset per-map state so the previous run's frames/trail don't carry over.
+    setFirstPerson(false);
     stopPlayback();
     V.currentFrames = [];
     V.currentFrame = 0;
-    if (V.playerSphere) V.playerSphere.visible = false;
+    if (V.playerBox) V.playerBox.visible = false;
     V.trailPoints.forEach(p => V.scene.remove(p));
     V.trailPoints = [];
-    if (V.pathGeometry) V.pathGeometry.setFromPoints([]);
     if (V.pathLine) V.pathLine.visible = false;
 
     const slider = document.getElementById('frameSlider');
@@ -260,51 +262,89 @@ function applyCollisionsToFrames() {
 // ═══════════════════════════════════════════════════════════════════════
 function updateVisualization() {
     if (!V.currentFrames.length) {
-        // No frames — keep playerSphere at spawn position (don't hide it)
+        // No frames — keep playerBox at spawn position (don't hide it)
         return;
     }
     const fr = V.currentFrames[V.currentFrame];
     if (!fr) return;
     const phys = frameVectors(V.currentFrame);
+    const fp = V.isFirstPerson;   // first person: no player marker, arrows, ground disc or trail
 
-    V.playerSphere.visible = true;
-    V.playerSphere.position.set(fr.x, fr.z, fr.y);
+    V.playerBox.visible = !fp;
+    V.playerBox.position.set(fr.x, fr.z, fr.y);
 
     // Arrows point along +X; rotation.y = Q3 yaw (Three Z is -Q3 Y), see scene-setup.js
     // Velocity arrow, scaled with speed
-    if (phys.hSpeed > 10 && (document.getElementById('showVelocity')?.checked ?? true)) {
+    if (!fp && phys.hSpeed > 10 && (document.getElementById('showVelocity')?.checked ?? true)) {
         V.velocityArrow.visible = true;
-        V.velocityArrow.position.copy(V.playerSphere.position);
+        V.velocityArrow.position.copy(V.playerBox.position);
         V.velocityArrow.rotation.y = phys.velYaw;
         const s = Math.min(Math.max(phys.hSpeed / 400, 0.4), 3);
         V.velocityArrow.scale.set(s, s, s);
     } else V.velocityArrow.visible = false;
 
     // Yaw (view) arrow
-    V.yawArrow.position.copy(V.playerSphere.position);
+    V.yawArrow.position.copy(V.playerBox.position);
     V.yawArrow.rotation.y = phys.yaw;
-    V.yawArrow.visible = document.getElementById('showYaw')?.checked ?? true;
+    V.yawArrow.visible = !fp && (document.getElementById('showYaw')?.checked ?? true);
 
     // Wish arrow: where this frame's keys push
-    if (phys.wishYaw !== null && (document.getElementById('showWish')?.checked ?? true)) {
+    if (!fp && phys.wishYaw !== null && (document.getElementById('showWish')?.checked ?? true)) {
         V.wishArrow.visible = true;
-        V.wishArrow.position.copy(V.playerSphere.position);
+        V.wishArrow.position.copy(V.playerBox.position);
         V.wishArrow.rotation.y = phys.wishYaw;
     } else V.wishArrow.visible = false;
 
     // Ground: a disc at the feet (origin is 24 above them)
-    if (fr.onGround && (document.getElementById('showGround')?.checked ?? true)) {
+    if (!fp && fr.onGround && (document.getElementById('showGround')?.checked ?? true)) {
         V.groundIndicator.position.set(fr.x, fr.z - 23, fr.y);
         V.groundIndicator.visible = true;
     } else V.groundIndicator.visible = false;
 
     // Trail
-    if (document.getElementById('showTrail')?.checked) updateTrail(fr);
+    if (!fp && document.getElementById('showTrail')?.checked) updateTrail(fr);
+    V.trailPoints.forEach(p => { p.visible = !fp; });
 
     // Waypoint check
     if (V.waypointSystem) V.waypointSystem.checkWaypoint({ x: fr.x, y: fr.y, z: fr.z }, V.currentFrame);
 
+    updateCamera(fr, phys);
     updateInfoPanel(fr, phys);
+}
+
+const EYE = 26;   // DEFAULT_VIEWHEIGHT: the eye above the player origin
+
+// Follow: the orbit target (and the camera with it) moves onto the player, keeping the
+// user's orbit angle and zoom. First person: the camera at the player's eye, looking along
+// the horizontal velocity (the view yaw when barely moving); the orbit controls are off.
+function updateCamera(fr, phys) {
+    if (V.isFlyMode) return;
+    if (V.isFirstPerson) {
+        const yaw = phys.hSpeed > 10 ? phys.velYaw : phys.yaw;   // Q3 yaw: Three's z is -Q3 y
+        V.camera.position.set(fr.x, fr.z + EYE, fr.y);
+        V.camera.lookAt(fr.x + Math.cos(yaw), fr.z + EYE, fr.y - Math.sin(yaw));
+    } else if (V.followCam) {
+        const p = new THREE.Vector3(fr.x, fr.z, fr.y);
+        V.camera.position.add(p.clone().sub(V.controls.target));
+        V.controls.target.copy(p);
+    }
+}
+
+function setFirstPerson(on) {
+    if (on === V.isFirstPerson) return;
+    if (on && !V.currentFrames.length) { toast('First person needs a run: load a demo or run a script / the optimizer'); return; }
+    V.isFirstPerson = on;
+    document.getElementById('btnFirstPerson')?.classList.toggle('active', on);
+    V.controls.enabled = !on;
+    if (on) {
+        if (V.isFlyMode) V.flyControls.unlock();
+        V.savedCam = { position: V.camera.position.clone(), target: V.controls.target.clone() };
+    } else if (V.savedCam) {
+        V.camera.position.copy(V.savedCam.position);
+        V.controls.target.copy(V.savedCam.target);
+        V.camera.lookAt(V.controls.target);
+    }
+    updateVisualization();   // marker / arrow visibility, and the camera (Follow re-centres on the player)
 }
 
 function updateTrail(fr) {
@@ -316,8 +356,11 @@ function updateTrail(fr) {
 }
 
 function updatePath() {
-    if (!V.currentFrames.length) return;
-    V.pathGeometry.setFromPoints(V.currentFrames.map(f => new THREE.Vector3(f.x, f.z, f.y)));
+    if (V.currentFrames.length < 2) return;
+    // A new geometry each time: Line2 keeps drawing the first geometry's segment count, and
+    // setPositions computes fresh bounds (stale ones got the old line frustum-culled).
+    V.pathLine.geometry.dispose();
+    V.pathLine.geometry = new LineGeometry().setPositions(V.currentFrames.flatMap(f => [f.x, f.z, f.y]));
     V.pathLine.visible = document.getElementById('showPath')?.checked ?? true;
 }
 
@@ -359,14 +402,29 @@ function setCurrentFrame(idx) {
 
 function togglePlayback() { V.isPlaying ? stopPlayback() : startPlayback(); }
 
+// The step buttons (and arrow keys) set the play direction: paused, they also step one
+// frame; playing, they turn the playback around.
+function stepFrame(dir) {
+    V.playDirection = dir;
+    updatePlayButton();
+    if (!V.isPlaying) setCurrentFrame(V.currentFrame + dir);
+}
+
+function updatePlayButton() {
+    const btn = document.getElementById('btnPlay');
+    if (btn) btn.textContent = V.isPlaying ? '⏸' : V.playDirection < 0 ? '◀' : '▶';
+}
+
 // Real time: 125 game frames per second × the speed selector, read every tick so a change
 // applies at once. Steps through every frame (trail, waypoint checks), however many a
-// display frame covers.
+// display frame covers, in V.playDirection (read every tick too).
 function startPlayback() {
     if (V.isPlaying || !V.currentFrames.length) return;
-    if (V.currentFrame >= V.currentFrames.length - 1) setCurrentFrame(0);   // at the end: replay
+    const lastFrame = V.currentFrames.length - 1;
+    if (V.playDirection > 0 && V.currentFrame >= lastFrame) setCurrentFrame(0);   // at the end: replay
+    if (V.playDirection < 0 && V.currentFrame <= 0) setCurrentFrame(lastFrame);   // backwards from the end
     V.isPlaying = true;
-    const btn = document.getElementById('btnPlay'); if (btn) btn.textContent = '⏸';
+    updatePlayButton();
     let last = performance.now(), due = 0;
     const tick = now => {
         if (!V.isPlaying) return;
@@ -374,8 +432,9 @@ function startPlayback() {
         due += Math.min(now - last, 250) * 0.125 * speed;   // ms → game frames; cap a stalled tab's catch-up
         last = now;
         for (; due >= 1; due--) {
-            if (V.currentFrame >= V.currentFrames.length - 1) { stopPlayback(); return; }
-            setCurrentFrame(V.currentFrame + 1);
+            const next = V.currentFrame + V.playDirection;
+            if (next < 0 || next > V.currentFrames.length - 1) { stopPlayback(); return; }
+            setCurrentFrame(next);
         }
         V.playbackFrame = requestAnimationFrame(tick);
     };
@@ -383,7 +442,7 @@ function startPlayback() {
 }
 function stopPlayback() {
     V.isPlaying = false;
-    const btn = document.getElementById('btnPlay'); if (btn) btn.textContent = '⏯';
+    updatePlayButton();
     if (V.playbackFrame) { cancelAnimationFrame(V.playbackFrame); V.playbackFrame = null; }
 }
 
@@ -417,7 +476,7 @@ function mapSpawn() {
 function loadFrames(frames, { simulated = false, keepCamera = false } = {}) {
     V.currentFrames = frames;
     V.currentFrame = 0;
-    V.playerSphere.visible = frames.length > 0;
+    V.playerBox.visible = frames.length > 0;
     const slider = document.getElementById('frameSlider');
     if (slider) slider.max = Math.max(0, frames.length - 1);
     if (!simulated) applyCollisionsToFrames();
@@ -454,7 +513,7 @@ async function handleDemoUpload(file) {
 // ═══════════════════════════════════════════════════════════════════════
 function exportOpts(kind) {
     const map = V.currentMapData?.mapName || 'map';
-    return { Q3: V.Q3Physics, spawn: mapSpawn(), map, name: `${map}_${kind}`.replace(/[^\w-]/g, '_'), triggers: V.timerTriggers };
+    return { Q3: V.Q3Physics, spawn: mapSpawn(), map, name: `${map}_${kind}`.replace(/[^\w-]/g, '_'), triggers: V.timerTriggers, cpm: V.cpm };
 }
 
 // make() returns {files: [one .cfg], run}. Downloads it; returns a status line, or throws.
@@ -491,7 +550,7 @@ function handleScriptRun() {
     const text = document.getElementById('scriptTextArea')?.value;
     if (!text?.trim()) { toast('Script is empty'); return; }
     if (!V.physicsReady) { toast('Physics engine not loaded'); return; }
-    const { inputs, replay, error } = runScript(text, V.Q3Physics, mapSpawn());
+    const { inputs, replay, error } = runScript(text, V.Q3Physics, mapSpawn(), V.cpm);
     const el = document.getElementById('scriptStatus');
     if (inputs.length) loadFrames(framesFromRun(inputs, replay), { simulated: true, keepCamera: true });
     const vel = replay.velocities, v = vel.at(-1);
@@ -538,6 +597,10 @@ async function runOptimizer() {
         toast(spawn ? 'Place at least 1 waypoint (or tick "Finish in the stop trigger")' : 'No spawn in this map: place at least 2 waypoints');
         return;
     }
+    const missing = V.waypointSystem.missingNumbers();
+    if (missing.length) toast(`Warning: waypoint ${missing.join(', ')} missing, the route skips that number`);
+    // The optimizer counts waypoints by position (1..n); show their numbers instead.
+    const wpNumber = i => V.waypointSystem.waypoints[i - 1]?.number ?? i;
 
     const statusEl = document.getElementById('optimizerStatus');
     const fillEl = document.getElementById('optimizerProgressFill');
@@ -555,22 +618,23 @@ async function runOptimizer() {
         const { inputs, replay, jumps, reached, totalSeg, first, cancelled } = await optimizeInWorker(
             {
                 // Plain copies: live waypoints reference THREE meshes, which can't be cloned to a worker.
-                waypoints: V.waypointSystem.waypoints.map(w => ({ position: w.position, radius: w.radius })),
+                waypoints: V.waypointSystem.waypoints.map(w => ({ position: w.position, radius: w.radius, height: w.height })),
                 spawn,
+                cpm: V.cpm,
                 race: triggers.start.length || triggers.stop.length ? { ...triggers, finish } : null,
                 rawBsp: V.currentMapData?.rawBsp
             },
-            ({ seg, totalSeg, wp, step, total }) => {
+            ({ seg, totalSeg, wp, step, total, workers }) => {
                 const pct = ((seg / totalSeg) + (step / total / totalSeg)) * 100;
                 if (fillEl) fillEl.style.width = pct.toFixed(1) + '%';
-                if (statusEl) statusEl.textContent = `${wp === 'finish' ? 'Stop trigger' : `Waypoint ${wp}/${nWps}`} · candidate ${step}/${total}`;
+                if (statusEl) statusEl.textContent = `${wp === 'finish' ? 'Stop trigger' : `Waypoint ${wpNumber(wp)} (${wp}/${nWps})`} · candidate ${step}/${total}${workers > 1 ? ` · ${workers} workers` : ''}`;
             },
             cancelBtn
         );
         if (!inputs.length) {
-            const target = first > nWps ? 'The stop trigger' : `Waypoint ${first}`;
+            const target = first > nWps ? 'The stop trigger' : `Waypoint ${wpNumber(first)}`;
             if (statusEl) statusEl.textContent = cancelled ? 'Cancelled'
-                : `${target} unreachable from ${first === 1 ? 'the spawn' : 'waypoint 1'}`;
+                : `${target} unreachable from ${first === 1 ? 'the spawn' : `waypoint ${wpNumber(1)}`}`;
             return;
         }
 
@@ -676,9 +740,9 @@ function setupViewerControls() {
     // Playback
     document.getElementById('frameSlider')?.addEventListener('input', e => setCurrentFrame(parseInt(e.target.value)));
     document.getElementById('btnFirst')?.addEventListener('click', () => setCurrentFrame(0));
-    document.getElementById('btnPrev')?.addEventListener('click', () => setCurrentFrame(V.currentFrame - 1));
+    document.getElementById('btnPrev')?.addEventListener('click', () => stepFrame(-1));
     document.getElementById('btnPlay')?.addEventListener('click', togglePlayback);
-    document.getElementById('btnNext')?.addEventListener('click', () => setCurrentFrame(V.currentFrame + 1));
+    document.getElementById('btnNext')?.addEventListener('click', () => stepFrame(1));
     document.getElementById('btnLast')?.addEventListener('click', () => setCurrentFrame(V.currentFrames.length - 1));
 
     // Viz toggles
@@ -689,6 +753,15 @@ function setupViewerControls() {
     document.getElementById('showMap')?.addEventListener('change', e => { if (V.mapMesh) V.mapMesh.visible = e.target.checked; });
 
     // Camera
+    document.getElementById('btnFollowCam')?.addEventListener('click', () => {
+        V.followCam = !V.followCam;
+        document.getElementById('btnFollowCam')?.classList.toggle('active', V.followCam);
+        if (V.followCam) updateVisualization();
+    });
+    document.getElementById('btnFirstPerson')?.addEventListener('click', () => setFirstPerson(!V.isFirstPerson));
+    // Preset views leave first person first (registered before their own handlers, so this runs first)
+    ['resetCamera', 'topView', 'sideView'].forEach(id =>
+        document.getElementById(id)?.addEventListener('click', () => setFirstPerson(false)));
     document.getElementById('resetCamera')?.addEventListener('click', () => {
         const spawn = findFirstSpawn(V.currentMapData?.bsp?.entities);
         if (spawn) {
@@ -763,7 +836,7 @@ function setupViewerControls() {
         document.getElementById('btnWaypointEditor')?.classList.toggle('active', V.isWaypointMode);
         document.getElementById('waypointPanel').style.display = V.isWaypointMode ? '' : 'none';
         if (V.isWaypointMode) V.renderer.domElement.style.cursor = 'crosshair';
-        else V.renderer.domElement.style.cursor = '';
+        else { V.renderer.domElement.style.cursor = ''; selectWaypoint(null); }
     });
     // Waypoint mode: a quick click without moving places (left) or deletes (middle) a waypoint;
     // holding or dragging is left to the camera controls.
@@ -773,30 +846,65 @@ function setupViewerControls() {
     canvas?.addEventListener('mousedown', e => { if (e.button === 1 && V.isWaypointMode) e.preventDefault(); });   // no middle-click autoscroll
     const isClick = e => press && press.button === e.button && performance.now() - press.t < 300
         && Math.hypot(e.clientX - press.x, e.clientY - press.y) < 5;
+    // After every change: the count, a warning for gaps in the numbering, and the next free number.
+    const wpNumberEl = document.getElementById('waypointNumber');
     const showWaypointCount = () => {
+        const ws = V.waypointSystem;
         const el = document.getElementById('waypointTotal');
-        if (el) el.textContent = V.waypointSystem?.waypoints.length ?? 0;
+        if (el) el.textContent = ws?.waypoints.length ?? 0;
+        const missing = ws?.missingNumbers() ?? [];
+        const warn = document.getElementById('waypointWarning');
+        if (warn) {
+            warn.textContent = missing.length ? `⚠ Missing waypoint ${missing.join(', ')}` : '';
+            warn.style.display = missing.length ? '' : 'none';
+        }
+        if (wpNumberEl && ws) wpNumberEl.value = ws.nextFreeNumber();
+        const sel = ws?.selectedWaypoint, selEl = document.getElementById('waypointSelected');
+        if (selEl) {
+            selEl.textContent = sel ? `Editing waypoint ${sel.number}: radius and height change it live (Esc: done)` : '';
+            selEl.style.display = sel ? '' : 'none';
+        }
     };
+    const radiusEl = document.getElementById('waypointRadius'), heightEl = document.getElementById('waypointHeight');
+    const readSize = () => ({ radius: Number(radiusEl?.value ?? 32), height: Number(heightEl?.value ?? 0) });
+    const sizeError = ({ radius, height }) => !(radius >= 4) ? 'Waypoint radius must be 4 or more'
+        : !(height >= 0) ? 'Waypoint height must be 0 or more' : null;
+    // Select a waypoint to edit (null: done): the inputs show its size and change it live.
+    // Done puts back the size they had for the next new waypoint.
+    let nextSize = null;
+    const selectWaypoint = wp => {
+        if (wp && !V.waypointSystem.selectedWaypoint) nextSize = { radius: radiusEl.value, height: heightEl.value };
+        V.waypointSystem.select(wp);
+        if (wp) { radiusEl.value = wp.radius; heightEl.value = wp.height; }
+        else if (nextSize) { radiusEl.value = nextSize.radius; heightEl.value = nextSize.height; nextSize = null; }
+        showWaypointCount();
+    };
+    // Click a ball: edit it (again: done). Elsewhere: done editing, or place the next waypoint.
     canvas?.addEventListener('click', e => {
-        if (V.isWaypointMode && V.waypointSystem && isClick(e) && V.waypointSystem.handleClick(e, V.camera)) showWaypointCount();
+        if (!V.isWaypointMode || !V.waypointSystem || !isClick(e)) return;
+        const ws = V.waypointSystem, hit = ws.pickAt(e, V.camera);
+        if (hit || ws.selectedWaypoint) { selectWaypoint(hit === ws.selectedWaypoint ? null : hit); return; }
+        const n = Number(wpNumberEl?.value), size = readSize();
+        if (!Number.isInteger(n) || n < 1) { toast('Waypoint number must be a whole number, 1 or more'); return; }
+        if (sizeError(size)) { toast(sizeError(size)); return; }
+        if (ws.has(n)) { toast(`Waypoint ${n} already exists`); return; }
+        if (ws.handleClick(e, V.camera, n, size.radius, size.height)) showWaypointCount();
+    });
+    // Typing a radius / height resizes the selected waypoint at once (invalid values wait)
+    [radiusEl, heightEl].forEach(el => el?.addEventListener('input', () => {
+        const wp = V.waypointSystem?.selectedWaypoint, size = readSize();
+        if (wp && !sizeError(size)) V.waypointSystem.resize(wp, size.radius, size.height);
+    }));
+    document.addEventListener('keydown', e => {
+        if (e.key === 'Escape' && V.waypointSystem?.selectedWaypoint) selectWaypoint(null);
     });
     canvas?.addEventListener('auxclick', e => {
         if (e.button !== 1 || !V.isWaypointMode || !V.waypointSystem || !isClick(e)) return;
-        const i = V.waypointSystem.deleteAt(e, V.camera);
-        if (i >= 0) { showWaypointCount(); toast(`Waypoint ${i + 1} deleted`); }
+        const n = V.waypointSystem.deleteAt(e, V.camera);
+        if (n >= 0) { showWaypointCount(); toast(`Waypoint ${n} deleted`); }
     });
     document.getElementById('btnResetWaypoints')?.addEventListener('click', () => V.waypointSystem?.resetWaypoints());
     document.getElementById('btnClearWaypoints')?.addEventListener('click', () => { V.waypointSystem?.clearAllWaypoints(); showWaypointCount(); });
-    document.getElementById('btnExportWaypoints')?.addEventListener('click', () => { if (V.waypointSystem) downloadFile('waypoints.json', V.waypointSystem.exportToJSON()); });
-    document.getElementById('btnImportWaypoints')?.addEventListener('click', () => document.getElementById('waypointImportInput')?.click());
-    document.getElementById('waypointImportInput')?.addEventListener('change', async e => {
-        if (e.target.files[0] && V.waypointSystem) {
-            const text = await e.target.files[0].text();
-            V.waypointSystem.importFromJSON(text);
-            showWaypointCount();
-        }
-        e.target.value = '';
-    });
 
     // Script editor
     document.getElementById('btnScriptEditor')?.addEventListener('click', toggleScriptEditor);
@@ -813,13 +921,23 @@ function setupViewerControls() {
         const text = scriptText();
         if (!text) { toast('Script is empty'); return; }
         exportToStatus(scriptStatusEl(), () => {
-            const opts = exportOpts('baked'), run = runScript(text, opts.Q3, opts.spawn);
+            const opts = exportOpts('baked'), run = runScript(text, opts.Q3, opts.spawn, opts.cpm);
             return run.error ? { files: [], run } : exportBaked(run.inputs, opts);
         });
     });
     document.getElementById('btnExportRoute')?.addEventListener('click', () => {
         if (!V.lastRoute?.length) { toast('Run the optimizer first'); return; }
         exportToStatus(document.getElementById('optimizerStatus'), () => exportBaked(V.lastRoute, exportOpts('route')));
+    });
+
+    // Physics: everything run from now on (scripts, optimizer, frame editor, exports) uses it.
+    // The last route was optimized for the other physics, so it can't be exported any more.
+    document.getElementById('physicsMode')?.addEventListener('change', e => {
+        V.cpm = e.target.value === 'cpm';
+        V.Q3Physics?._SetPromode(V.cpm ? 1 : 0);
+        V.lastRoute = null;
+        document.getElementById('btnExportRoute').style.display = 'none';
+        toast(V.cpm ? 'Physics: CPM (df_promode 1), run again to apply' : 'Physics: VQ3, run again to apply');
     });
 
     // Optimizer
@@ -844,20 +962,20 @@ function setupViewerControls() {
         }
 
         switch (e.key) {
-            case 'ArrowLeft': e.preventDefault(); setCurrentFrame(V.currentFrame - 1); break;
-            case 'ArrowRight': e.preventDefault(); setCurrentFrame(V.currentFrame + 1); break;
+            case 'ArrowLeft': e.preventDefault(); stepFrame(-1); break;
+            case 'ArrowRight': e.preventDefault(); stepFrame(1); break;
             case ' ': e.preventDefault(); togglePlayback(); break;
             case 'Home': e.preventDefault(); setCurrentFrame(0); break;
             case 'End': e.preventDefault(); setCurrentFrame(V.currentFrames.length - 1); break;
             case 'f':
             case 'F':
                 if (V.isFlyMode) V.flyControls.unlock();
-                else V.flyControls.lock();
+                else { setFirstPerson(false); V.flyControls.lock(); }
                 break;
             case 'Enter':
                 // Enter already activates a focused button/select; don't also grab the mouse.
                 if (e.target.tagName === 'BUTTON' || e.target.tagName === 'SELECT') break;
-                if (!V.isFlyMode) V.flyControls.lock();
+                if (!V.isFlyMode) { setFirstPerson(false); V.flyControls.lock(); }
                 break;
         }
     });
@@ -942,9 +1060,9 @@ function animate() {
         if (V.moveDown)     V.camera.position.y -= V.moveSpeed;
     } else {
         // OrbitControls.update() forces the camera to look at its target every
-        // frame, which would override PointerLockControls mouse-look. Only run
-        // it when fly mode is OFF.
-        V.controls?.update();
+        // frame, which would override PointerLockControls mouse-look and the first
+        // person view. Only run it when neither is on.
+        if (!V.isFirstPerson) V.controls?.update();
     }
     V.renderer?.render(V.scene, V.camera);
 }

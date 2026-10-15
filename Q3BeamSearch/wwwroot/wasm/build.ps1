@@ -1,7 +1,8 @@
 ﻿# Build oDFe WebAssembly
 #   ./build.ps1                      (emcc already on PATH, or EMSDK set)
 #   ./build.ps1 -Emsdk C:\path\emsdk (activates that emsdk for this run)
-param([string]$Emsdk = $env:EMSDK)
+#   ./build.ps1 -NodeOut <dir>       (a Node.js build into <dir> for tests; wwwroot is not touched)
+param([string]$Emsdk = $env:EMSDK, [string]$NodeOut = "")
 
 if (-not (Get-Command emcc -ErrorAction SilentlyContinue)) {
     if (-not $Emsdk -or -not (Test-Path (Join-Path $Emsdk "emsdk_env.ps1"))) {
@@ -29,6 +30,8 @@ $sources = @(
     "src/odfe/bg_lib.c",
     "src/odfe/q_math.c",
     "src/odfe/browser_stubs.c",
+    # yaw chooser for the route optimizer (twin of js/strafe.js and oDFe code/client/cl_snapyaw.c)
+    "src/odfe/cl_snapyaw.c",
     # ioq3 collision model (real world geometry for Pmove traces)
     "src/cm/cm_load.c",
     "src/cm/cm_trace.c",
@@ -40,7 +43,7 @@ $sources = @(
 
 # Exported functions — StepPhysics replaces PmoveSingle.
 # LoadCollisionMap / HasCollisionMap added for the CM world-loading path.
-$exportedFunctions = '["_InitPhysics","_StepPhysics","_IsPlayerOnGround","_GetPmFlags","_GetHorizontalSpeed","_SetPlayerSpeed","_SetGravity","_GetPlayerPosition","_GetPlayerVelocity","_GetPlayerAngles","_SimulateFrames","_LoadCollisionMap","_HasCollisionMap","_malloc","_free"]'
+$exportedFunctions = '["_InitPhysics","_StepPhysics","_IsPlayerOnGround","_GetPmFlags","_GetHorizontalSpeed","_SetPlayerSpeed","_SetGravity","_SetPromode","_SnapYaw","_GetPlayerPosition","_GetPlayerVelocity","_GetPlayerAngles","_SimulateFrames","_LoadCollisionMap","_HasCollisionMap","_malloc","_free"]'
 $exportedRuntimeMethods = '["ccall","cwrap","getValue","setValue","HEAPF32","HEAP32","HEAPU8"]'
 
 # Build command arguments
@@ -53,7 +56,7 @@ $emccArgs = @(
     "-s", "MODULARIZE=1"
     "-s", "EXPORT_NAME=Q3PhysicsModule"
     # worker: the waypoint optimizer loads it in a Web Worker
-    "-s", "ENVIRONMENT=web,worker"
+    "-s", $(if ($NodeOut) { "ENVIRONMENT=node" } else { "ENVIRONMENT=web,worker" })
     "-s", "SINGLE_FILE=0"
     # 256 MB: the collision model reserves a 64 MB hunk for map data on top of
     # the physics working set. ALLOW_MEMORY_GROWTH is on, so this is a ceiling.
@@ -77,13 +80,17 @@ $emccArgs = @(
     # "-D ENTITYNUM_NONE=1023" and "-D MASK_PLAYERSOLID=1", which both just
     # produced macro-redefinition warnings (the headers won anyway). Dropping
     # them keeps the build warning-clean now that real world collision is wired in.
-) + $sources + @("-o", "output/q3physics.js")
+) + $sources + @("-o", $(if ($NodeOut) { Join-Path $NodeOut "q3physics.cjs" } else { "output/q3physics.js" }))
 
 # Run emcc
 Write-Host "Running: emcc $($emccArgs -join ' ')"
 & emcc @emccArgs
 
-if ($LASTEXITCODE -eq 0) {
+if ($LASTEXITCODE -eq 0 -and $NodeOut) {
+    Write-Host "Node build in $NodeOut" -ForegroundColor Green
+    Pop-Location
+}
+elseif ($LASTEXITCODE -eq 0) {
     Write-Host "Build successful!" -ForegroundColor Green
     Get-ChildItem output/ | Format-Table Name, Length
 

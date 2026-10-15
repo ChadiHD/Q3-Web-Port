@@ -8,7 +8,7 @@
 // Assumes box-shaped trigger brushes (their model bounds) and timer triggers that retrigger
 // every frame.
 
-const PLAYER_MINS = [-15, -15, -24], PLAYER_MAXS = [15, 15, 32];   // standing (crouched maxs z is 16)
+export const PLAYER_MINS = [-15, -15, -24], PLAYER_MAXS = [15, 15, 32];   // standing (crouched maxs z is 16)
 export const FRAME_MS = 8;
 
 // {start, checkpoints, stop}: arrays of {mins, maxs} boxes (Q3 coords), from the BSP's entities

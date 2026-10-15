@@ -252,7 +252,7 @@ set cl_scriptRun 1; set fixedtime 8; set com_maxfps 125
 - New `docs/SCRIPTING.md`: commands, exports, oDFe steps (`cl_scriptRun`, `setyaw`, bots).
 
 ## Out of scope
-- CPM (not in oDFe source).
+- CPM (not in oDFe source). Done later (2026-10-13): see `docs/PHYSICS_AND_COLLISION.md` and the changelog.
 - C# optimizer/exporter (kept).
 - cl_tas (left as is, superseded).
 - Path traversal in `/convert-cfg` and `/demo/{fileName}` (flag separately).

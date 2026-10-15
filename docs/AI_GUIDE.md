@@ -45,6 +45,18 @@ knowledge that isn't obvious from the code.
    patch-surface collision need a human to load a map in the browser. Be explicit in your
    summaries about what you did and did **not** verify.
 
+4. **Stale browser modules.** The ES modules import each other without version tags. Before
+   `Program.cs` sent `Cache-Control: no-cache`, browsers cached them heuristically for days,
+   so an edit could leave old and new modules mixed. Symptom: `V.something` is null where
+   current code always sets it (e.g. `t is null` on `V.timerTriggers` in
+   `transitionToViewer`, because a July `map-render.js` was still cached). Fix: one hard
+   refresh (Ctrl+Shift+R). Keep that header.
+
+5. **A hidden browser preview pane never fires `requestAnimationFrame`.** Playback and the
+   render loop use it, so in an automated preview they stand still. To test playback, put
+   `window.requestAnimationFrame = cb => setTimeout(() => cb(performance.now()), 16)` in
+   the page first. The canvas is also 0×0 until the viewport is given a size.
+
 ## Conventions and invariants — do not break these
 
 - **Coordinate discipline.** Q3 world (Z-up) ↔ Three.js (Y-up, `(x,z,-y)`) ↔ viewer frame

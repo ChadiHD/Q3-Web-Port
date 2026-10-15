@@ -12,22 +12,26 @@
 // The route starts where a script would in game: at the map spawn, landed and at rest.
 // On a map with DeFRaG timer triggers it can finish in the stop trigger, and "frames" means
 // race frames: from the last frame in the start trigger (frames spent there are free).
-// Pure VQ3: no air wishspeed cap (that is Q1 / CPM behaviour).
+// CPM (DeFRaG df_promode 1, the WASM's pm_promode): ground accel 15, and in the air each frame
+// also tries the strafe key alone (accel 70 up to 30: tight turns, and fast from low speed)
+// and forward alone (air control), keeping whichever keys score best that frame.
 
-import { bestYaw, shortToYaw } from './strafe.js';
+import { shortToYaw } from './strafe.js';
 import { PmoveRunner } from './pmove-runner.js';
-import { touches, boxCenter, raceTime } from './race-timer.js';
+import { touches, boxCenter, raceTime, PLAYER_MINS, PLAYER_MAXS } from './race-timer.js';
 
 // VQ3 constants (bg_pmove.c, wrapper.c InitPhysics defaults)
 const DT = 0.008;                      // 125 fps
 const SPEED = 320;                     // ps.speed
 const ACCEL = 10, AIR_ACCEL = 1;       // pm_accelerate, pm_airaccelerate
+const CPM_ACCEL = 15;                  // CPM ground accel
+const CPM_TURN = 70 * 30;              // CPM strafe key alone: accel × wishspeed, ups/s sideways
 const FRICTION = 6, STOP_SPEED = 100;  // pm_friction, pm_stopspeed
 const KEY = 127;                       // usercmd moves are signed chars
 const JUMP_UP = 10;                    // jump-frame upmove: PM_CheckJump needs >= 10
 const JUMP_WISH = SPEED * Math.hypot(KEY, KEY) / Math.hypot(KEY, KEY, JUMP_UP); // PM_CmdScale, ~319.5
 const STAND = 24;                      // player origin height above the floor (bbox mins z)
-const REACH_DZ = 96;                   // a waypoint is a cylinder: its radius across, ±96 vertically (a full hop)
+const HALF_WIDTH = PLAYER_MAXS[0];     // 15: the hitbox reaches this far past the origin across
 
 // Search space. Every combination is simulated, so nothing has to be chosen by hand.
 //   turn:       λ in strafe.bestYaw's score (1-λ)·speed + λ·progress toward the waypoint;
@@ -46,9 +50,19 @@ const BEAM = 4;  // ponytail: greedy per-leg beam; widen if routes with sharp tu
 const wrap = a => Math.atan2(Math.sin(a), Math.cos(a));          // radians to (-pi, pi]
 const toShort = rad => ((Math.round(rad * 65536 / (2 * Math.PI)) % 65536) + 65536) % 65536;
 const hspeed = v => Math.hypot(v[0], v[1]);
-// A waypoint is reached inside its cylinder; a trigger target ({box}) when the player touches it.
-const reached = (pos, wp) => wp.box ? touches(wp.box, pos)
-    : Math.hypot(pos[0] - wp.x, pos[1] - wp.y) <= wp.r && Math.abs(pos[2] - wp.z) <= REACH_DZ;
+// Does the player's hitbox (standing: mins -15 -15 -24, maxs 15 15 32 around the origin) touch
+// a waypoint ball of radius r, with the origin (dx, dy, dz) from the ball's centre? True when
+// the box's nearest point to the centre is within r: grazing the ball counts, the middle
+// doesn't matter. Playback uses it too, so what's drawn is what's reached.
+export function hitboxTouches(dx, dy, dz, r) {
+    const near = (d, k) => { const lo = d + PLAYER_MINS[k], hi = d + PLAYER_MAXS[k]; return lo > 0 ? lo : hi < 0 ? hi : 0; };
+    const x = near(dx, 0), y = near(dy, 1), z = near(dz, 2);
+    return x * x + y * y + z * z <= r * r;
+}
+// A trigger target ({box}) is reached when the player touches it.
+const reached = (pos, wp) => wp.box ? touches(wp.box, pos) : hitboxTouches(pos[0] - wp.x, pos[1] - wp.y, pos[2] - wp.z, wp.r);
+// How far off a target's centre the origin can pass and still reach it (across, height aside)
+const reachRadius = wp => wp.box ? 0 : wp.r + HALF_WIDTH;
 
 // Frames that count: after the last frame in a start trigger, if one was touched.
 const counted = node => (node.timerStart >= 0 ? node.inputs.length - 1 - node.timerStart : node.inputs.length);
@@ -65,9 +79,14 @@ function estimate(node, wps, seg) {
 }
 
 export class WaypointOptimizer {
-    constructor(Q3) {
-        this.sim = new PmoveRunner(Q3);
+    constructor(Q3, cpm = false) {
+        this.sim = new PmoveRunner(Q3, cpm);
+        this.cpm = cpm;
         this._cancelled = false;
+        // Runs one leg's candidates: (start, beam, jobs, wps, seg, progress) => Promise of the
+        // children, in job order. null = this.runLeg (here, one after another); the optimizer
+        // worker plugs in a pool of helper workers instead.
+        this.legRunner = null;
     }
 
     cancel() { this._cancelled = true; }
@@ -83,24 +102,34 @@ export class WaypointOptimizer {
         const side = phi >= 0 ? 1 : -1;                  // +1 = turn left (counter-clockwise)
 
         // Would even a full-strength air turn (wish 90° off velocity) miss the waypoint?
-        // That turn's radius is v²·dt / a = v² / 320; if the aim point sits inside the
-        // circle by more than `margin`, slow down on the ground instead of hopping.
-        const R = sp * sp / (AIR_ACCEL * SPEED);
+        // That turn's radius is v²·dt / a = v² / 320 (CPM strafe key alone: v² / 2100); if the
+        // aim point sits inside the circle by more than `margin`, slow down on the ground instead of hopping.
+        const R = sp * sp / (this.cpm ? CPM_TURN : AIR_ACCEL * SPEED);
         const cx = st.pos[0] - side * Math.sin(velAng) * R, cy = st.pos[1] + side * Math.cos(velAng) * R;
         const brake = R - Math.hypot(aim[0] - cx, aim[1] - cy) > margin;
         const jump = st.onGround && frame >= p.prestrafe && Math.abs(phi) <= p.groundTurn && !brake;
-        const keys = { f: KEY, s: -side * KEY, u: jump ? JUMP_UP : 0 };
+        let keys = { f: KEY, s: -side * KEY, u: jump ? JUMP_UP : 0 };
         const mode = jump ? 'jump' : st.onGround ? 'ground' : 'air';
 
         let yawShort = null;
         if (!brake) {
             // Below the CGaz threshold every angle up to ~90° gets full accel, so
             // heading straight for the aim point costs no speed: score progress only.
-            const wish = jump ? JUMP_WISH : SPEED, accel = mode === 'ground' ? ACCEL : AIR_ACCEL;
+            const wish = jump ? JUMP_WISH : SPEED, accel = mode === 'ground' ? (this.cpm ? CPM_ACCEL : ACCEL) : AIR_ACCEL;
             const vf = mode === 'ground' ? Math.max(0, sp - Math.max(sp, STOP_SPEED) * FRICTION * DT) : sp;
             const lambda = vf <= wish - accel * DT * wish ? 1 : p.turn;
-            const r = bestYaw({ vel: st.vel, mode }, keys, side, { aim: [Math.cos(bearing), Math.sin(bearing)], lambda });
-            if (r) yawShort = r.yawShort;
+            const aimDir = [Math.cos(bearing), Math.sin(bearing)];
+            const score = o => (1 - lambda) * Math.hypot(o[0], o[1]) + lambda * (o[0] * aimDir[0] + o[1] * aimDir[1]);
+            // CPM air (jump frames are AirMove too): strafe key alone, and forward alone when turning
+            // counts (its air control turns without gaining, so on speed alone it can't beat forward + strafe)
+            // ponytail: up to three chooser calls per CPM air frame (~7x the VQ3 search time); prune if long routes get slow
+            const tries = !this.cpm || mode === 'ground' ? [keys]
+                : lambda ? [keys, { ...keys, f: 0 }, { ...keys, s: 0 }] : [keys, { ...keys, f: 0 }];
+            let best = -Infinity;
+            for (const k of tries) {
+                const r = this.sim.bestYaw({ vel: st.vel, mode, cpm: this.cpm }, k, side, { aim: aimDir, lambda });
+                if (r && score(r.vel) > best + 1e-9) { best = score(r.vel); yawShort = r.yawShort; keys = k; }
+            }
         }
         if (yawShort === null) {
             // Braking (ground: aim at it, friction tightens the turn; air: turn hardest),
@@ -113,11 +142,12 @@ export class WaypointOptimizer {
         return { ...keys, yawShort, yaw: shortToYaw(yawShort) };
     }
 
-    // Aim point: the waypoint centre, or `cut` of its radius toward the following waypoint.
+    // Aim point: the waypoint centre, or `cut` of its reach (radius + the hitbox's half width:
+    // the box only has to graze the ball) toward the following waypoint.
     _aim(wp, next, cut) {
         if (!next || !cut) return [wp.x, wp.y];
-        const dx = next.x - wp.x, dy = next.y - wp.y, l = Math.hypot(dx, dy) || 1;
-        return [wp.x + dx / l * cut * wp.r, wp.y + dy / l * cut * wp.r];
+        const dx = next.x - wp.x, dy = next.y - wp.y, l = Math.hypot(dx, dy) || 1, R = reachRadius(wp);
+        return [wp.x + dx / l * cut * R, wp.y + dy / l * cut * R];
     }
 
     // Replay `node` from the start, then drive the controller to waypoint `seg`.
@@ -130,7 +160,7 @@ export class WaypointOptimizer {
         let jumps = node.jumps, timerStart = node.timerStart;
         // ponytail: cap = 2.5x the straight-line time at ground speed + 1 s; raise if long curving legs time out
         const cap = inputs.length + Math.ceil(2.5 * Math.hypot(wp.x - st.pos[0], wp.y - st.pos[1], wp.z - st.pos[2]) / SPEED / DT) + 125;
-        const margin = (1 - p.cut) * wp.r;   // aim is cut·r off centre, so this much slack still lands inside
+        const margin = (1 - p.cut) * reachRadius(wp);   // aim is cut·reach off centre, so this much slack still reaches it
         while (inputs.length < cap) {
             const inp = this._control(st, aim, margin, p, inputs.length);
             this.sim.step(st, inp);
@@ -140,6 +170,20 @@ export class WaypointOptimizer {
             if (reached(st.pos, wp)) return { inputs, jumps, timerStart, pos: [...st.pos], vel: [...st.vel] };
         }
         return null;
+    }
+
+    // Every candidate of a leg (jobs: {node: index into beam, p}), here, one after another.
+    // Returns the children in job order (null = waypoint not reached); stops early on cancel.
+    async runLeg(start, beam, jobs, wps, seg, progress) {
+        const children = [];
+        for (let i = 0; i < jobs.length && !this._cancelled; i++) {
+            children.push(this._extend(start, beam[jobs[i].node], wps, seg, jobs[i].p));
+            if ((i + 1) % 8 === 0) {   // report, and let a 'cancel' message in
+                progress(i + 1);
+                await new Promise(r => setTimeout(r, 0));
+            }
+        }
+        return children;
     }
 
     // One continuous run of the chosen inputs: the exact path to display.
@@ -164,8 +208,9 @@ export class WaypointOptimizer {
     async optimizeRoute(waypoints, onProgress, spawn = null, race = null) {
         this._cancelled = false;
         this.startBoxes = race?.start ?? [];
-        const all = waypoints.map(w => ({ x: w.position.x, y: -w.position.y, z: w.position.z, r: w.radius }));
-        const start = spawn ? this.sim.settle(spawn.origin) : { pos: [all[0].x, all[0].y, all[0].z + STAND], onGround: false };
+        // z = the ball centre: on the clicked floor, raised by the waypoint's height (the gap under the ball)
+        const all = waypoints.map(w => ({ x: w.position.x, y: -w.position.y, z: w.position.z + w.radius + (w.height ?? 0), floor: w.position.z, r: w.radius }));
+        const start = spawn ? this.sim.settle(spawn.origin) : { pos: [all[0].x, all[0].y, all[0].floor + STAND], onGround: false };
         // wps[0] is the start; legs go to wps[1..]
         const wps = spawn ? [{ x: start.pos[0], y: start.pos[1], z: start.pos[2] - STAND, r: 0 }, ...all] : all;
         if (race?.finish && race.stop?.length) {
@@ -179,22 +224,16 @@ export class WaypointOptimizer {
         let beam = [{ inputs: [], jumps: 0, timerStart: -1, pos: start.pos, vel: [0, 0, 0] }];
         let done = 0;
 
+        const runLeg = this.legRunner ?? ((...a) => this.runLeg(...a));
         for (let seg = 1; seg <= totalSeg; seg++) {
             const grid = seg === 1 ? FIRST_LEG : LEG;
-            const total = beam.length * grid.length;
+            const jobs = beam.flatMap((_, node) => grid.map(p => ({ node, p })));
+            const progress = step => onProgress?.({ seg: seg - 1, totalSeg, wp: wps[seg].box ? 'finish' : first + seg - 1, step, total: jobs.length });
+            const children = await runLeg(start, beam, jobs, wps, seg, progress);
+            // Merged in job order, so a pool's result is the same as running them one by one.
             const seen = new Map();   // identical routes from different settings collapse here
-            let step = 0;
-            search: for (const node of beam) {
-                for (const p of grid) {
-                    if (this._cancelled) break search;
-                    const child = this._extend(start, node, wps, seg, p);
-                    if (child) seen.set(`${child.inputs.length}|${child.pos.map(c => c.toFixed(2))}`, child);
-                    if (++step % 8 === 0) {   // report, and let a 'cancel' message in
-                        onProgress?.({ seg: seg - 1, totalSeg, wp: wps[seg].box ? 'finish' : first + seg - 1, step, total });
-                        await new Promise(r => setTimeout(r, 0));
-                    }
-                }
-            }
+            for (const child of children)
+                if (child) seen.set(`${child.inputs.length}|${child.pos.map(c => c.toFixed(2))}`, child);
             if (seen.size) {
                 const est = new Map([...seen.values()].map(n => [n, estimate(n, wps, seg)]));
                 beam = [...seen.values()]

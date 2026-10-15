@@ -6,11 +6,12 @@ import { simulate, rint } from '../Q3BeamSearch/wwwroot/js/strafe.js';
 
 export function flatFloorQ3() {
     const h = new Float32Array(16);
-    let ground = false, jumpHeld = false;
+    let ground = false, jumpHeld = false, cpm = false;
     return {
         HEAPF32: h,
         _malloc: () => 0,
         _InitPhysics() { ground = false; jumpHeld = false; },
+        _SetPromode(on) { cpm = !!on; },   // CPM horizontal moves; no double / ramp jumps here
         _IsPlayerOnGround: () => (ground ? 1 : 0),
         _GetPmFlags: () => (jumpHeld ? 2 : 0),   // PMF_JUMP_HELD
         _StepPhysics(pp, vp, ap, f, s, u, buttons, dt) {
@@ -20,7 +21,7 @@ export function flatFloorQ3() {
             const walking = h[p + 2] <= 24.25 && v[2] <= 0;               // PM_GroundTrace before the move
             let mode = walking ? 'ground' : 'air';
             if (walking && u >= 10 && !jumpHeld) { mode = 'jump'; jumpHeld = true; }
-            const [vx, vy] = simulate({ vel: [...v], mode }, { f, s, u }, yawShort);
+            const [vx, vy] = simulate({ vel: [...v], mode, cpm }, { f, s, u }, yawShort);
             let vz = mode === 'jump' ? 270 : mode === 'ground' ? 0 : v[2];
             const end = mode === 'ground' ? 0 : vz - 800 * dt;
             h[p] += vx * dt; h[p + 1] += vy * dt; h[p + 2] += (vz + end) / 2 * dt;

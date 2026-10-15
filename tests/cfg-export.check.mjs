@@ -15,9 +15,9 @@ const ran = runScript(script, flatFloorQ3(), SPAWN);
 const baked = exportBaked(ran.inputs, opts('flat_baked'));
 assert.equal(baked.files.length, 1);
 const text = baked.files[0].text;
-assert.match(text, /^\/\/ flat_baked\.cfg: movement for flat/);
+assert.match(text, /^\/\/ flat_baked\.cfg: VQ3 movement for flat/);
 assert.match(text, /scriptplay flat_baked/);
-assert.match(text, /set fixedtime 8; set com_maxfps 125; set cl_run 1; set cl_scriptRun 1/);
+assert.match(text, /set fixedtime 8; set com_maxfps 125; set cl_run 1; set cl_scriptRun 1\nscriptphysics vq3\n/);
 assert.ok(!/snapbot|autojump|\+left|\+right/.test(text.replace(/^-.*$/gm, '')), 'baked: no bots or turn keys pressed');
 assert.match(text, /\+speed/, 'walking frames press +speed');
 assert.match(text, /set cl_scriptRun 0; set fixedtime 0\necho expected end after 420 frames: origin .*; scriptpos\n$/);
@@ -47,7 +47,7 @@ console.log(`ok long: ${wiggle.length} frames, ${long.files[0].text.length} byte
 
 // As written: header + the script + footer; runs the same as the script alone.
 const asw = exportScript(script, opts('flat_script'));
-assert.match(asw.files[0].text, /set cl_scriptRun 1\n-forward;.*\nsetyaw 90\n\+snapbot/);
+assert.match(asw.files[0].text, /set cl_scriptRun 1\nscriptphysics vq3\n-forward;.*\nsetyaw 90\n\+snapbot/);
 assert.deepEqual(usercmds(runScript(asw.files[0].text, flatFloorQ3(), SPAWN)), usercmds(ran));
 assert.equal(exportScript('+forward; wait 3\nbogus', opts('x')).run.error, 'line 2: Unknown command "bogus"');
 console.log('ok as written');
@@ -56,3 +56,12 @@ console.log('ok as written');
 assert.throws(() => bakeInputs([{ f: 100, s: 0, u: 0, yawShort: 0 }]), /can't be made with keys/);
 assert.throws(() => bakeInputs([{ f: 127, s: 0, u: 127, yawShort: 0 }]), /can't be made with keys/);
 console.log('ok refuses non-key moves');
+
+// CPM: the header declares it (scriptplay stops on a VQ3 game), and the run replays only as CPM.
+const cpmRun = runScript(script, flatFloorQ3(), SPAWN, true);
+const cpm = exportBaked(cpmRun.inputs, { ...opts('flat_cpm'), cpm: true }).files[0].text;
+assert.match(cpm, /^\/\/ flat_cpm\.cfg: CPM movement for flat.*\n.*df_promode 1, devmap flat/);
+assert.match(cpm, /\nscriptphysics cpm\n/);
+assert.deepEqual(usercmds(runScript(cpm, flatFloorQ3(), SPAWN, true)), usercmds(cpmRun));
+assert.match(runScript(cpm, flatFloorQ3(), SPAWN).error, /line 5: the script is for CPM: switch Physics to CPM/);
+console.log('ok cpm export');

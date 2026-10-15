@@ -5,10 +5,14 @@
 import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { PointerLockControls } from 'three/addons/controls/PointerLockControls.js';
+import { Line2 } from 'three/addons/lines/Line2.js';
+import { LineMaterial } from 'three/addons/lines/LineMaterial.js';
+import { LineGeometry } from 'three/addons/lines/LineGeometry.js';
 import { FrameEditor } from './frame-editor.js';
 import { WaypointSystem } from './waypoint-system.js';
 import { V } from './viewer-state.js';
 import { toast } from './ui-utils.js';
+import { PLAYER_PHYSICS_BOUNDS } from './collision-detection.js';
 
 export function initThreeJS() {
     V.scene = new THREE.Scene();
@@ -74,6 +78,7 @@ export function initThreeJS() {
         V.camera.aspect = window.innerWidth / window.innerHeight;
         V.camera.updateProjectionMatrix();
         V.renderer.setSize(window.innerWidth, window.innerHeight);
+        V.pathMaterial.resolution.set(window.innerWidth, window.innerHeight);
     });
 
     // Subsystems
@@ -85,16 +90,25 @@ export function initThreeJS() {
 }
 
 function createPlayerObjects() {
-    V.playerSphere = new THREE.Mesh(
-        new THREE.SphereGeometry(8, 16, 16),
-        new THREE.MeshPhongMaterial({ color: 0xff6b6b, emissive: 0x220000, shininess: 80 })
-    );
-    V.playerSphere.visible = false;
-    V.scene.add(V.playerSphere);
+    // The player as Quake 3's hitbox (standing: mins -15 -15 -24, maxs 15 15 32 around the
+    // origin, so its centre is 4 above it), axis-aligned like the game's: see-through, coloured
+    // edges. The group sits at the origin.
+    const { mins, maxs } = PLAYER_PHYSICS_BOUNDS;
+    const geo = new THREE.BoxGeometry(maxs[0] - mins[0], maxs[2] - mins[2], maxs[1] - mins[1]);   // Three: y is up
+    const box = new THREE.Mesh(geo, new THREE.MeshBasicMaterial({ color: 0xff6b6b, transparent: true, opacity: 0.15, depthWrite: false }));
+    const edges = new THREE.LineSegments(new THREE.EdgesGeometry(geo), new THREE.LineBasicMaterial({ color: 0xff6b6b }));
+    box.position.y = edges.position.y = (mins[2] + maxs[2]) / 2;
+    V.playerBox = new THREE.Group();
+    V.playerBox.add(box, edges);
+    V.playerBox.visible = false;
+    V.scene.add(V.playerBox);
 
-    V.pathGeometry = new THREE.BufferGeometry();
-    V.pathMaterial = new THREE.LineBasicMaterial({ color: 0x4fc3f7, transparent: true, opacity: 0.8 });
-    V.pathLine = new THREE.Line(V.pathGeometry, V.pathMaterial);
+    // Fat line: WebGL draws a plain THREE.Line 1 px wide whatever its linewidth. linewidth is in
+    // pixels; resolution must follow the canvas (resize handler). No tone mapping: exact colour.
+    V.pathMaterial = new LineMaterial({ color: 0x1565c0, linewidth: 3, toneMapped: false });
+    V.pathMaterial.resolution.set(window.innerWidth, window.innerHeight);
+    V.pathLine = new Line2(new LineGeometry(), V.pathMaterial);
+    V.pathLine.visible = false;
     V.scene.add(V.pathLine);
 
     V.velocityArrow = createArrowGroup(0x4caf50); V.scene.add(V.velocityArrow);

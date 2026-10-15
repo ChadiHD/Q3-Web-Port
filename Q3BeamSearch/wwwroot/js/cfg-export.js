@@ -4,7 +4,8 @@
 //   - baked: frame-exact, one `setyaw` + key changes + `wait` per change, from any run's
 //     inputs (scripts, optimizer routes, the frame editor). No bots or turn keys, so it
 //     replays the same usercmds whatever the bots would decide in game.
-// Both get a header that sets up cl_scriptRun and the start yaw, and a footer that releases
+// Both get a header that sets up cl_scriptRun, checks the physics (scriptphysics stops the script
+// when the game runs the other one) and sets the start yaw, and a footer that releases
 // everything, restores normal play and prints where the tool says the run ends next to where
 // the game is (`scriptpos`). Baked files print that comparison every second too.
 // They are meant for `scriptplay <name>`, which counts one usercmd per wait in any engine
@@ -17,12 +18,13 @@ const yawDeg = s => s * 45 / 8192;   // s * 360/65536 as an exact decimal; setya
 const RELEASE = KEYS.map(k => '-' + k).join('; ');
 const CHECK_EVERY = 125;             // a checkpoint every second
 
-function header(map, name, startYaw) {
+function header(map, name, startYaw, cpm) {
     return [
-        `// ${name}.cfg: movement for ${map}, made with Q3BeamSearch (docs/SCRIPTING.md)`,
-        `// Needs the modified oDFe. Put it in defrag/, then: devmap ${map}, stand still at the spawn, scriptplay ${name}`,
+        `// ${name}.cfg: ${cpm ? 'CPM' : 'VQ3'} movement for ${map}, made with Q3BeamSearch (docs/SCRIPTING.md)`,
+        `// Needs the modified oDFe. Put it in defrag/, then: df_promode ${cpm ? 1 : 0}, devmap ${map}, stand still at the spawn, scriptplay ${name}`,
         '// scriptplay sends one usercmd per wait in any engine; exec only matches in builds that count wait once a frame.',
         'set fixedtime 8; set com_maxfps 125; set cl_run 1; set cl_scriptRun 1',
+        `scriptphysics ${cpm ? 'cpm' : 'vq3'}`,
         RELEASE,
         ...(startYaw === null ? [] : [`setyaw ${yawDeg(startYaw)}`]),
     ];
@@ -82,13 +84,13 @@ const file = (name, lines) => ({ name: `${name}.cfg`, text: lines.join('\n') + '
 // Baked export of a run's inputs. The expectations come from replaying the baked cfg in the
 // tool, which starts at the landed spawn like the game; that replay must give the same usercmds.
 // Returns {files: [{name, text}], run}.
-export function exportBaked(inputs, { Q3, spawn, map, name, triggers = null }) {
+export function exportBaked(inputs, { Q3, spawn, map, name, triggers = null, cpm = false }) {
     if (!inputs.length) throw new Error('nothing to export');
-    const head = header(map, name, null);
-    const run = runScript([...head, ...bakeInputs(inputs)].join('\n'), Q3, spawn);
+    const head = header(map, name, null, cpm);
+    const run = runScript([...head, ...bakeInputs(inputs)].join('\n'), Q3, spawn, cpm);
     if (run.error) throw new Error(`baked cfg failed in the simulator: ${run.error}`);
     const lines = [...head, ...bakeInputs(inputs, i => checkpoint(run, i)), ...footer(run, triggers)];
-    const check = runScript(lines.join('\n'), Q3, spawn);
+    const check = runScript(lines.join('\n'), Q3, spawn, cpm);
     const i = inputs.findIndex((inp, k) => !check.inputs[k] || !same(inp, check.inputs[k]));
     if (check.error || i >= 0 || check.inputs.length !== inputs.length)
         throw new Error(check.error ?? `baked cfg doesn't reproduce frame ${i >= 0 ? i : check.inputs.length}`);
@@ -97,10 +99,10 @@ export function exportBaked(inputs, { Q3, spawn, map, name, triggers = null }) {
 
 // The script as written, with the header (start yaw = the spawn's, as the tool assumes) and
 // footer. Returns {files, run}; run.error is set when the tool can't run the script.
-export function exportScript(script, { Q3, spawn, map, name, triggers = null }) {
-    const run = runScript(script, Q3, spawn);
+export function exportScript(script, { Q3, spawn, map, name, triggers = null, cpm = false }) {
+    const run = runScript(script, Q3, spawn, cpm);
     if (run.error) return { files: [], run };
     if (!run.inputs.length) throw new Error('the script runs no frames');
-    const lines = [...header(map, name, spawnYawShort(spawn)), ...script.replace(/\r/g, '').split('\n'), ...footer(run, triggers)];
+    const lines = [...header(map, name, spawnYawShort(spawn), cpm), ...script.replace(/\r/g, '').split('\n'), ...footer(run, triggers)];
     return { files: [file(name, lines)], run };
 }

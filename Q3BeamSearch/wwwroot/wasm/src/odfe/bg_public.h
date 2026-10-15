@@ -156,6 +156,19 @@ typedef enum {
 
 #define	PMF_ALL_TIMES	(PMF_TIME_WATERJUMP|PMF_TIME_LAND|PMF_TIME_KNOCKBACK)
 
+// CPM (DeFRaG df_promode 1). DeFRaG is closed source: the rules follow Opensource Defrag
+// (References/defrag/src/game/sgame/phy/q3a.c, a 1:1 remake) and the constants the proxymod HUD
+// reverse engineered from DeFRaG (References/defrag/src/game/cgame/hud/wip/bg_local.h).
+extern int pm_promode;						// set by wrapper.c SetPromode
+#define	STAT_CPM_LASTJUMP	(MAX_STATS - 1)	// cmd.serverTime of the jump that opened the double-jump window
+#define	CPM_ACCELERATE		15.0f			// ground and slick
+#define	CPM_AIRSTOPACCEL	2.5f			// air, accelerating against the velocity
+#define	CPM_AIRSTRAFEACCEL	70.0f			// air, strafe keys only
+#define	CPM_AIRWISHSPEED	30.0f			// air, strafe keys only
+#define	CPM_AIRCONTROL		150.0f			// air, forward/back only
+#define	CPM_JUMP_WINDOW		400				// msec
+#define	CPM_DOUBLEJUMP		100				// extra jump velocity inside the window
+
 #define	MAXTOUCH	32
 typedef struct {
 	// state (in / out)

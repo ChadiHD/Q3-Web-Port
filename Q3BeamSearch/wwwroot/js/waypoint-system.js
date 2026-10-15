@@ -2,6 +2,9 @@
 // Waypoint System for TAS optimization with Q3 Physics
 
 import * as THREE from 'three';
+import { hitboxTouches } from './waypoint-optimizer.js';
+
+const SELECTED = 0xffff00;   // outline of the waypoint being edited
 
 export class WaypointSystem {
     constructor(scene, map) {
@@ -11,49 +14,71 @@ export class WaypointSystem {
         this.currentWaypoint = 0;
         this.waypointMarkers = [];
         this.isEditMode = false;
-        this.selectedWaypoint = null;
+        this.selectedWaypoint = null;   // the one being edited (outline yellow), or null
         this.raycaster = new THREE.Raycaster();
         this.mouse = new THREE.Vector2();
     }
 
-    // Add waypoint by clicking on map
-    addWaypoint(position, radius = 32, color = 0xff0000) {
+    // Add waypoint number `number` (default: the lowest free one) on the clicked surface point
+    // `position`: a ball of `radius` resting on it, lifted by `height` (the gap under the ball).
+    // Numbers stay fixed when others are deleted. Returns null if the number is already taken.
+    addWaypoint(position, number = this.nextFreeNumber(), radius = 32, height = 0, color = 0xff0000) {
+        if (this.has(number)) return null;
         const waypoint = {
-            index: this.waypoints.length,
+            number,
             position: { x: position.x, y: position.y, z: position.z },
+            height,
             radius: radius,
             reached: false,
             reachTime: null,
             color: color
         };
 
-        this.waypoints.push(waypoint);
-        this.renderWaypoint(waypoint);
+        // Both arrays stay in number order: the route (optimizer, playback check) follows it.
+        let i = this.waypoints.findIndex(wp => wp.number > number);
+        if (i < 0) i = this.waypoints.length;
+        this.waypoints.splice(i, 0, waypoint);
+        this.waypointMarkers.splice(i, 0, this.renderWaypoint(waypoint));
 
-        console.log(`[WaypointSystem] Added waypoint #${waypoint.index} at (${position.x.toFixed(1)}, ${position.y.toFixed(1)}, ${position.z.toFixed(1)})`);
+        console.log(`[WaypointSystem] Added waypoint #${number} at (${position.x.toFixed(1)}, ${position.y.toFixed(1)}, ${position.z.toFixed(1)})`);
 
         return waypoint;
     }
 
-    // Render waypoint marker in 3D scene
+    has(number) { return this.waypoints.some(wp => wp.number === number); }
+
+    nextFreeNumber() {
+        let n = 1;
+        while (this.has(n)) n++;
+        return n;
+    }
+
+    // Numbers below the highest waypoint that have no waypoint.
+    missingNumbers() {
+        const missing = [];
+        for (let n = 1; n < (this.waypoints.at(-1)?.number ?? 0); n++) if (!this.has(n)) missing.push(n);
+        return missing;
+    }
+
+    // Build a waypoint's marker, add it to the scene, and return it
     renderWaypoint(waypoint) {
         const group = new THREE.Group();
 
-        // Sphere marker
+        // Sphere marker (green once reached in playback)
         const geometry = new THREE.SphereGeometry(waypoint.radius, 16, 16);
         const material = new THREE.MeshBasicMaterial({
-            color: waypoint.color,
+            color: waypoint.reached ? 0x00ff00 : waypoint.color,
             transparent: true,
-            opacity: 0.3,
+            opacity: waypoint.reached ? 0.6 : 0.3,
             wireframe: false
         });
         const sphere = new THREE.Mesh(geometry, material);
         group.add(sphere);
 
-        // Wireframe outline
+        // Wireframe outline (yellow while selected)
         const wireframeGeo = new THREE.EdgesGeometry(geometry);
         const wireframeMat = new THREE.LineBasicMaterial({
-            color: waypoint.color,
+            color: waypoint === this.selectedWaypoint ? SELECTED : waypoint.color,
             linewidth: 2
         });
         const wireframe = new THREE.LineSegments(wireframeGeo, wireframeMat);
@@ -68,46 +93,70 @@ export class WaypointSystem {
         context.font = 'Bold 64px Arial';
         context.textAlign = 'center';
         context.textBaseline = 'middle';
-        context.fillText((waypoint.index + 1).toString(), 64, 64);
+        context.fillText(waypoint.number.toString(), 64, 64);
 
         const texture = new THREE.CanvasTexture(canvas);
-        const spriteMaterial = new THREE.SpriteMaterial({ map: texture });
+        const spriteMaterial = new THREE.SpriteMaterial({ map: texture, depthTest: false });   // never hidden by walls
         const sprite = new THREE.Sprite(spriteMaterial);
+        sprite.renderOrder = 1;
         sprite.scale.set(waypoint.radius * 2, waypoint.radius * 2, 1);
-        sprite.position.set(0, 0, waypoint.radius * 1.5);
+        sprite.position.copy(this._labelOffset(waypoint));
         group.add(sprite);
 
-        // Position the group
-        group.position.set(waypoint.position.x, waypoint.position.z, waypoint.position.y);
+        // Raised: a stem from the ball down to the clicked surface, so its spot on the map is visible
+        if (waypoint.height > 0) {
+            const r = waypoint.radius;
+            const stem = new THREE.BufferGeometry().setFromPoints([new THREE.Vector3(0, -r, 0), new THREE.Vector3(0, -r - waypoint.height, 0)]);
+            group.add(new THREE.Line(stem, new THREE.LineBasicMaterial({ color: waypoint.color })));
+        }
+
+        // Position the group at the ball centre
+        group.position.copy(this._center(waypoint));
         group.updateMatrixWorld(true);   // pickable (deleteAt) before the next render
         group.userData = { waypoint: waypoint };
 
-        this.waypointMarkers.push(group);
         this.scene.add(group);
+        return group;
     }
 
-    // Check if player reached waypoint
+    // Ball centre in Three coordinates (y up): resting on the clicked surface point, lifted by the height
+    _center(waypoint) {
+        return new THREE.Vector3(waypoint.position.x, waypoint.position.z + waypoint.radius + waypoint.height, waypoint.position.y);
+    }
+
+    // The number label's offset from the ball centre (Three axes, y up): above the ball, or
+    // beside it when the map is in the way (low ceiling, wall), so it sits in open space.
+    _labelOffset(waypoint) {
+        const r = waypoint.radius, d = r * 1.75;
+        const offsets = [[0, d, 0], [d, r, 0], [-d, r, 0], [0, r, d], [0, r, -d]].map(o => new THREE.Vector3(...o));
+        if (!this.map) return offsets[0];
+        const center = this._center(waypoint);
+        // Clear = no drawn map surface from the centre to half a label past the offset. Sky
+        // surfaces don't count (not drawn as surfaces); near 1 skips the floor the ball was clicked on.
+        const clear = o => !new THREE.Raycaster(center, o.clone().normalize(), 1, o.length() + r * 0.5)
+            .intersectObject(this.map, true).some(h => !h.object.userData?.isSky);
+        return offsets.find(clear) ?? offsets[0];
+    }
+
+    // Check if the player (origin, viewer convention) reached the next waypoint: its hitbox
+    // touches the ball, the same test as the optimizer's (waypoint-optimizer.js hitboxTouches)
     checkWaypoint(playerPos, frame) {
         const current = this.waypoints[this.currentWaypoint];
         if (!current || current.reached) return false;
 
-        const distance = this.distance3D(
-            playerPos,
-            current.position
-        );
-
-        if (distance <= current.radius) {
+        const p = current.position, cz = p.z + current.radius + current.height;
+        if (hitboxTouches(playerPos.x - p.x, playerPos.y - p.y, playerPos.z - cz, current.radius)) {
             current.reached = true;
             current.reachTime = frame;
 
             // Update marker appearance
-            const marker = this.waypointMarkers[current.index];
+            const marker = this.waypointMarkers[this.currentWaypoint];
             if (marker) {
                 marker.children[0].material.color.setHex(0x00ff00); // Green when reached
                 marker.children[0].material.opacity = 0.6;
             }
 
-            console.log(`[WaypointSystem] Waypoint #${current.index} reached at frame ${frame} (${(frame / 125).toFixed(2)}s)`);
+            console.log(`[WaypointSystem] Waypoint #${current.number} reached at frame ${frame} (${(frame / 125).toFixed(2)}s)`);
 
             this.currentWaypoint++;
             return true;
@@ -116,92 +165,46 @@ export class WaypointSystem {
         return false;
     }
 
-    // Delete waypoint
+    // Delete the waypoint at array position `index`. The others keep their numbers.
     deleteWaypoint(index) {
         if (index < 0 || index >= this.waypoints.length) return false;
 
-        // Remove from scene
-        const marker = this.waypointMarkers[index];
-        if (marker) {
-            this.scene.remove(marker);
-        }
+        this._removeMarker(this.waypointMarkers[index]);
+        if (this.waypoints[index] === this.selectedWaypoint) this.selectedWaypoint = null;
 
         // Remove from arrays
         this.waypoints.splice(index, 1);
         this.waypointMarkers.splice(index, 1);
-
-        // Reindex
-        this.waypoints.forEach((wp, i) => {
-            wp.index = i;
-            // Update label
-            if (this.waypointMarkers[i]) {
-                const sprite = this.waypointMarkers[i].children[2]; // Sprite is 3rd child
-                const canvas = document.createElement('canvas');
-                const context = canvas.getContext('2d');
-                canvas.width = 128;
-                canvas.height = 128;
-                context.fillStyle = '#ffffff';
-                context.font = 'Bold 64px Arial';
-                context.textAlign = 'center';
-                context.textBaseline = 'middle';
-                context.fillText((i + 1).toString(), 64, 64);
-                sprite.material.map = new THREE.CanvasTexture(canvas);
-                sprite.material.map.needsUpdate = true;
-            }
-        });
+        if (index < this.currentWaypoint) this.currentWaypoint--;
 
         return true;
     }
 
-    // Move waypoint
-    moveWaypoint(index, newPosition) {
-        if (index < 0 || index >= this.waypoints.length) return false;
+    // Take a marker out of the scene and free its GPU buffers and textures
+    _removeMarker(marker) {
+        if (!marker) return;
+        this.scene.remove(marker);
+        marker.traverse(o => { o.geometry?.dispose(); o.material?.map?.dispose(); o.material?.dispose(); });
+    }
 
-        this.waypoints[index].position = newPosition;
-        const marker = this.waypointMarkers[index];
-        if (marker) {
-            marker.position.set(newPosition.x, newPosition.z, newPosition.y);
+    // Select a waypoint to edit (null: none). Its outline turns yellow.
+    select(waypoint) {
+        const old = this.selectedWaypoint;
+        this.selectedWaypoint = waypoint;
+        for (const wp of [old, waypoint]) {
+            const marker = wp && this.waypointMarkers[this.waypoints.indexOf(wp)];
+            marker?.children[1].material.color.setHex(wp === this.selectedWaypoint ? SELECTED : wp.color);
         }
-
-        return true;
     }
 
-    // Calculate total time to reach all waypoints
-    getTotalTime() {
-        if (this.waypoints.length === 0) return null;
-
-        const lastReached = this.waypoints.filter(wp => wp.reached).pop();
-        if (!lastReached) return null;
-
-        return {
-            frames: lastReached.reachTime,
-            seconds: (lastReached.reachTime / 125).toFixed(2)
-        };
-    }
-
-    // Get route statistics
-    getRouteStats() {
-        const stats = {
-            totalWaypoints: this.waypoints.length,
-            reachedWaypoints: this.waypoints.filter(wp => wp.reached).length,
-            totalTime: this.getTotalTime(),
-            splits: []
-        };
-
-        let lastTime = 0;
-        this.waypoints.forEach((wp, i) => {
-            if (wp.reached) {
-                const split = {
-                    waypoint: i + 1,
-                    time: (wp.reachTime / 125).toFixed(2) + 's',
-                    splitTime: ((wp.reachTime - lastTime) / 125).toFixed(2) + 's'
-                };
-                stats.splits.push(split);
-                lastTime = wp.reachTime;
-            }
-        });
-
-        return stats;
+    // Change a waypoint's radius and height and redraw it at once (live editing)
+    resize(waypoint, radius, height) {
+        const i = this.waypoints.indexOf(waypoint);
+        if (i < 0) return;
+        waypoint.radius = radius;
+        waypoint.height = height;
+        this._removeMarker(this.waypointMarkers[i]);
+        this.waypointMarkers[i] = this.renderWaypoint(waypoint);
     }
 
     // Reset all waypoints
@@ -223,13 +226,12 @@ export class WaypointSystem {
 
     // Clear all waypoints
     clearAllWaypoints() {
-        this.waypointMarkers.forEach(marker => {
-            this.scene.remove(marker);
-        });
+        this.waypointMarkers.forEach(marker => this._removeMarker(marker));
 
         this.waypoints = [];
         this.waypointMarkers = [];
         this.currentWaypoint = 0;
+        this.selectedWaypoint = null;
     }
 
     _aim(event, camera) {
@@ -240,20 +242,25 @@ export class WaypointSystem {
         this.raycaster.setFromCamera(this.mouse, camera);
     }
 
-    // Delete the waypoint under the mouse (the nearest one the ray hits). Returns its index or -1.
-    deleteAt(event, camera) {
-        if (!this.isEditMode || !this.waypointMarkers.length) return -1;
+    // The waypoint under the mouse (the nearest one the ray hits), or null
+    pickAt(event, camera) {
+        if (!this.isEditMode || !this.waypointMarkers.length) return null;
         this._aim(event, camera);
-        const hit = this.raycaster.intersectObjects(this.waypointMarkers, true)[0];
-        let group = hit?.object;
-        while (group && !group.userData?.waypoint) group = group.parent;
-        const index = group ? this.waypoints.indexOf(group.userData.waypoint) : -1;
-        if (index >= 0) this.deleteWaypoint(index);
-        return index;
+        let o = this.raycaster.intersectObjects(this.waypointMarkers, true)[0]?.object;
+        while (o && !o.userData?.waypoint) o = o.parent;
+        return o?.userData.waypoint ?? null;
     }
 
-    // Handle mouse click for waypoint placement/selection
-    handleClick(event, camera) {
+    // Delete the waypoint under the mouse. Returns its number or -1.
+    deleteAt(event, camera) {
+        const wp = this.pickAt(event, camera);
+        if (!wp) return -1;
+        this.deleteWaypoint(this.waypoints.indexOf(wp));
+        return wp.number;
+    }
+
+    // Place waypoint `number` (default: the lowest free one) where the click hits the map
+    handleClick(event, camera, number, radius, height) {
         if (!this.isEditMode) return null;
         this._aim(event, camera);
 
@@ -264,53 +271,11 @@ export class WaypointSystem {
                 const point = intersects[0].point;
                 // Convert from Three.js to Q3 coordinates
                 const q3Pos = { x: point.x, y: point.z, z: point.y };
-                return this.addWaypoint(q3Pos);
+                return this.addWaypoint(q3Pos, number, radius, height);
             }
         }
 
         return null;
-    }
-
-    // Export waypoints to JSON
-    exportToJSON() {
-        return JSON.stringify({
-            waypoints: this.waypoints.map(wp => ({
-                index: wp.index,
-                position: wp.position,
-                radius: wp.radius,
-                color: wp.color
-            }))
-        }, null, 2);
-    }
-
-    // Import waypoints from JSON
-    importFromJSON(jsonData) {
-        try {
-            const data = JSON.parse(jsonData);
-            this.clearAllWaypoints();
-
-            data.waypoints.forEach(wpData => {
-                this.addWaypoint(
-                    wpData.position,
-                    wpData.radius || 32,
-                    wpData.color || 0xff0000
-                );
-            });
-
-            return true;
-        } catch (error) {
-            console.error('[WaypointSystem] Import failed:', error);
-            return false;
-        }
-    }
-
-    // Utility functions
-    distance3D(pos1, pos2) {
-        return Math.sqrt(
-            Math.pow(pos1.x - pos2.x, 2) +
-            Math.pow(pos1.y - pos2.y, 2) +
-            Math.pow(pos1.z - pos2.z, 2)
-        );
     }
 
     // Toggle edit mode

@@ -50,6 +50,12 @@
             <button id="btnOptimize" class="toggle-btn" title="Run optimizer on waypoint route">&#x26A1; Optimize</button>
             <span class="separator"></span>
             <button id="btnScriptEditor" class="toggle-btn" title="Write a movement script">&#x270F;&#xFE0F; Script Editor</button>
+            <span class="separator"></span>
+            <label for="physicsMode" style="font-size:12px;color:#aaa" title="DeFRaG physics for scripts, the optimizer, the frame editor and exports. CPM = df_promode 1.">Physics:</label>
+            <select id="physicsMode" title="DeFRaG physics for scripts, the optimizer, the frame editor and exports. CPM = df_promode 1.">
+                <option value="vq3" selected>VQ3</option>
+                <option value="cpm">CPM</option>
+            </select>
         </div>
 
         <!-- Left panel: controls -->
@@ -64,11 +70,11 @@
                     <div id="frameDisplay" class="frame-display">0 / 0</div>
                 </div>
                 <div class="control-row">
-                    <button id="btnFirst">&#x23EE;</button>
-                    <button id="btnPrev">&#x23F4;</button>
-                    <button id="btnPlay">&#x23EF;</button>
-                    <button id="btnNext">&#x23F5;</button>
-                    <button id="btnLast">&#x23ED;</button>
+                    <button id="btnFirst" title="First frame">&#x23EE;</button>
+                    <button id="btnPrev" title="Back one frame, and play backwards">&#x23F4;</button>
+                    <button id="btnPlay" title="Play / pause (direction: the last step button pressed)">&#x25B6;</button>
+                    <button id="btnNext" title="Forward one frame, and play forwards">&#x23F5;</button>
+                    <button id="btnLast" title="Last frame">&#x23ED;</button>
                     <select id="playbackSpeed">
                         <option value="0.10">0.10x</option>
                         <option value="0.25">0.25x</option>
@@ -119,6 +125,10 @@
                     <button id="topView">Top</button>
                     <button id="sideView">Side</button>
                 </div>
+                <div class="control-row">
+                    <button id="btnFollowCam" class="toggle-btn active" title="Keep the camera on the player (orbit and zoom around it)">Follow</button>
+                    <button id="btnFirstPerson" class="toggle-btn" title="First person, looking along the velocity; hides the player and the arrows">1st Person</button>
+                </div>
             </div>
         </div>
 
@@ -140,20 +150,23 @@
         <!-- Waypoint panel (bottom-left, hidden until waypoint mode) -->
         <div id="waypointPanel" class="waypoint-panel" style="display:none">
             <h4>Waypoints</h4>
-            <div style="font-size:11px;color:#aaa;margin-bottom:6px">Left click: place · Middle click: delete · Drag: camera</div>
+            <div style="font-size:11px;color:#aaa;margin-bottom:6px">Left click: place, or click a ball to edit it · Middle click: delete · Esc: done editing · Drag: camera</div>
             <div class="info-item"><span class="info-label">Total:</span><span class="info-value" id="waypointTotal">0</span></div>
-            <div class="info-item"><span class="info-label">Reached:</span><span class="info-value" id="waypointReached">0</span></div>
-            <div class="info-item"><span class="info-label">Time:</span><span class="info-value" id="waypointTime">-</span></div>
+            <div class="control-row" style="margin-top:6px" title="Number of the next waypoint you place. The optimizer visits waypoints in number order. Defaults to the lowest free number, so a deleted waypoint can be put back.">
+                <label for="waypointNumber">Next #:</label>
+                <input type="number" id="waypointNumber" min="1" step="1" value="1" style="width:60px">
+            </div>
+            <div id="waypointSelected" style="display:none;color:#ffeb3b;font-size:11px;margin-bottom:4px"></div>
+            <div class="control-row" title="Ball size, and the gap under it (0 = resting on the clicked surface; raise it for spots the player only passes in the air). A waypoint is reached when the player's hitbox touches the ball. Sets the next waypoint, or the selected one live.">
+                <label for="waypointRadius">Radius:</label>
+                <input type="number" id="waypointRadius" min="4" step="4" value="32" style="width:60px">
+                <label for="waypointHeight">Height:</label>
+                <input type="number" id="waypointHeight" min="0" step="8" value="0" style="width:60px">
+            </div>
+            <div id="waypointWarning" style="display:none;color:#ffb74d;font-size:11px;margin-bottom:6px"></div>
             <div style="margin-top:10px;display:flex;flex-direction:column;gap:5px">
                 <button id="btnResetWaypoints" style="width:100%">Reset</button>
                 <button id="btnClearWaypoints" style="width:100%">Clear All</button>
-                <button id="btnExportWaypoints" style="width:100%">Export JSON</button>
-                <button id="btnImportWaypoints" style="width:100%">Import JSON</button>
-                <input type="file" id="waypointImportInput" accept=".json" style="display:none">
-            </div>
-            <div id="waypointSplits" style="margin-top:10px;max-height:200px;overflow-y:auto">
-                <h5>Splits:</h5>
-                <div id="waypointSplitsList" style="font-size:11px"></div>
             </div>
         </div>
 
@@ -163,6 +176,7 @@
             <textarea id="scriptTextArea" spellcheck="false" placeholder="// Runs like exec in the modified oDFe (cl_scriptRun 1, 125 fps), from the map spawn.
 // wait N = N frames. +snapbot: best snap angle, +strafebot: CGaz angle,
 // +autojump: frame-perfect hops (upmove 10). setyaw <deg>: exact view yaw.
+// Physics menu = VQ3 or CPM (in CPM, +snapbot with a strafe key alone sidestrafes).
 setyaw 90
 +forward; wait 24           // run straight
 +snapbot; +autojump; +left  // strafe-jump, curving left
@@ -184,7 +198,7 @@ wait 200
         <!-- Optimizer panel (hidden until toggled) -->
         <div id="optimizerPanel" class="optimizer-panel" style="display:none">
             <h4>Route Optimizer</h4>
-            <div style="font-size:12px;color:#aaa">VQ3 strafe-jump search from the map spawn through your waypoints, best by fewest frames, then highest speed, then fewest jumps.</div>
+            <div style="font-size:12px;color:#aaa">Strafe-jump search (VQ3 or CPM, from the Physics menu) from the map spawn through your waypoints, best by fewest frames, then highest speed, then fewest jumps.</div>
             <label id="optFinishRow" style="display:none;font-size:12px;margin-top:6px" title="After your waypoints, the route ends in the map's stop trigger nearest the last one. Place waypoints that lead there: an unreachable stop trigger costs a long search."><input type="checkbox" id="optFinish"> Finish in the stop trigger</label>
             <button id="btnRunOptimizer" class="btn-primary" style="width:100%;margin-top:8px">&#x26A1; Run Optimizer</button>
             <button id="btnCancelOptimizer" style="width:100%;margin-top:4px;display:none">Cancel</button>
@@ -200,7 +214,7 @@ wait 200
         <!-- Legend -->
         <div class="legend" id="legendPanel">
             <h4>Legend</h4>
-            <div class="legend-item"><div class="legend-color" style="background:#4fc3f7"></div><span>Path</span></div>
+            <div class="legend-item"><div class="legend-color" style="background:#1565c0"></div><span>Path</span></div>
             <div class="legend-item"><div class="legend-color" style="background:#ff6b6b"></div><span>Player</span></div>
             <div class="legend-item"><div class="legend-color" style="background:#4caf50"></div><span>Velocity</span></div>
             <div class="legend-item"><div class="legend-color" style="background:#ff9800"></div><span>Yaw</span></div>

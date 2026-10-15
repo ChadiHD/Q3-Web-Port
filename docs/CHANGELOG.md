@@ -5,6 +5,123 @@ give future maintainers (human or AI) the *why*, not just the *what*.
 
 ---
 
+## 2026-10-15 — C chooser in the WASM, hitbox reach, waypoint editing, player hitbox
+
+- **Yaw chooser in C.** The optimizer's per-frame chooser now runs `cl_snapyaw.c` inside `q3physics.wasm` (export
+  `SnapYaw`, called through `PmoveRunner.bestYaw`). If the WASM predates the export, `strafe.js` runs it as before.
+  - The C gained the optimizer's aim + λ score (`CL_SnapYawAim`); `CL_SnapYaw` is unchanged for the engine bots.
+  - It is faster in two ways:
+    - a once-built forward-vector table per short, since WebAssembly `sin`/`cos` are software;
+    - bitsets walked in order instead of two `qsort`s, since musl's smoothsort was ~90% of its time.
+  - It is identical to `strafe.js` on 30,000 frames (`tests/snapyaw-wasm.check.mjs`) and 4× faster in Node.
+  - On dhoni (CPM, 6 waypoints) the routes are identical. Single-threaded: 1.34 s with the C chooser, 4.37 s with
+    `strafe.js`. With the worker pool: 0.46 s.
+  - The engine copy in `References/oDFe/code/client` is the same file (it compiles clean with gcc).
+  - `build.ps1 -NodeOut <dir>` builds a Node copy for the check.
+- **Reach = the hitbox touching the ball.** A waypoint is reached when the player's standing hitbox (±15 across,
+  −24..+32 around the origin) touches its ball. The optimizer and playback share the test (`hitboxTouches`).
+  - Before, the optimizer tested the origin point against a ±96 cylinder for floor waypoints. That is why routes
+    sometimes counted a waypoint the drawn path visibly hopped over.
+  - Corner cutting aims within radius + 15, since grazing is enough.
+- **Waypoint height is now the gap under the ball:** 0 = resting on the clicked surface (centre = surface + radius).
+  Before, the centre sat on the surface, half sunk into the floor.
+- **Edit a waypoint:**
+  - Clicking a ball selects it (yellow outline), and Radius / Height then resize it live.
+  - Clicking it again, clicking elsewhere, Esc, or leaving waypoint mode ends editing.
+  - Ending an edit restores the inputs' values for the next new waypoint.
+  - Redrawn markers free their GPU buffers.
+- **Player = Q3 hitbox:** a see-through 30×30×56 box with coloured edges (centre 4 above the origin), replacing the
+  sphere (`V.playerBox`).
+
+---
+
+## 2026-10-14 (later) — Playback direction, follow / first-person camera, raised waypoints
+
+- **Playback direction.** ⏴ / ⏵ (and ← / →) set the direction. When paused they also step one frame; while playing
+  they turn the playback around. The play button shows ▶ or ◀. Backwards stops at frame 0, and play there starts
+  from the end.
+- **Follow** (on by default): the orbit target stays on the player and keeps the user's angle and zoom.
+- **1st Person:** the camera sits at the eye (origin + 26) and looks along the horizontal velocity (the view yaw
+  under 10 ups). The player marker, arrows, ground disc and trail are hidden; the path stays. The orbit camera comes
+  back on exit. Top / Side / Reset Cam, fly mode and a map load all leave first person.
+- **Waypoint radius and height.** Height raises the ball above the clicked surface, with a stem drawn down to it,
+  for spots the player only passes in the air. A raised waypoint is reached inside its ball (radius across, ±radius
+  vertically). A floor waypoint keeps the old rule: within the radius, up to a full hop vertically. Playback now uses
+  the same test as the optimizer (`insideWaypoint`); before, it used a plain sphere around the clicked point. Check:
+  `tests/waypoint-system.check.mjs`.
+- **Layout:**
+  - Controls panel 360 px (it overflowed at five-digit frame numbers).
+  - Frame Info a fixed 260 px wide; its width used to follow the coordinates' length.
+  - Optimizer and frame editor moved left of Frame Info, so they no longer overlap it.
+
+---
+
+## 2026-10-14 — Fixed waypoint numbers; static files revalidate
+
+- **Waypoint numbers stay fixed.** Deleting one no longer renumbers the rest. The panel's "Next #" chooses the next
+  waypoint's number and defaults to the lowest free one, so a deleted waypoint can be put back. A duplicate number is
+  refused. Gaps show "⚠ Missing waypoint …" in the panel and as a warning toast when the optimizer starts. The route
+  (optimizer, playback check) follows number order. Check: `tests/waypoint-system.check.mjs`.
+- **Removed** the waypoint Export/Import JSON buttons, and the Splits / Reached / Time readouts, which nothing ever
+  filled. Race timing comes from the DeFRaG timer triggers.
+- **Waypoint labels** sit above the ball. Where the map is in the way (low ceiling, wall), the label moves to the
+  first clear side. Sky surfaces don't count, since they aren't drawn as surfaces. Labels are drawn without depth
+  test, so walls never hide them.
+- **Path line** is a 3 px `Line2`, dark blue `0x1565c0`, with tone mapping off. The old `THREE.Line` was always 1 px
+  (WebGL ignores `linewidth`). Its geometry was updated in place without new bounds, so a stale bounding sphere got it
+  frustum-culled at some camera angles. Each path update now builds a fresh `LineGeometry`: `Line2` keeps drawing
+  the first geometry's segment count.
+- **Physics selector** (VQ3/CPM) moved from the waypoint panel to the top bar.
+- **Optimizer speed.** A Firefox profile of a 112 s run showed WASM physics at ~2%. About 95% was JavaScript: the
+  `strafe.js` chooser plus its per-call Map/Set, two comparator sorts, per-eval `sin`/`cos`, and GC.
+  - **Chooser:** reusable typed arrays with numeric sorts, outcomes returned through module variables, and a
+    once-built forward-vector table per yaw short. Bit-identical to the old version on 20,000 random VQ3/CPM frames
+    (yaw, velocity, eval count), and 2.6× faster in Node.
+  - **Worker pool:** `optimizer-worker.js` runs each leg's candidates on helper workers (`legRunner`). The route is
+    identical to the single-threaded run (dhoni, VQ3 and CPM). CPM run: 1.24 s against 4.86 s single-threaded.
+    `tests/waypoint-optimizer.check.mjs` checks that out-of-order completion gives the same route.
+- **`Program.cs`** sends `Cache-Control: no-cache` on static files. Before this, browsers kept a July `map-render.js`
+  next to a new `viewer3d-v2.js` (`t is null` in `transitionToViewer`, blank timer). See `AI_GUIDE.md` gotcha 4.
+
+---
+
+## 2026-10-13 — CPM physics (DeFRaG `df_promode 1`)
+
+- **Sources.** DeFRaG is closed source. CPM follows Opensource Defrag (`References/defrag`, `phy/q3a.c`, a 1:1 remake)
+  and the proxymod HUD constants reverse engineered from DeFRaG. They disagree on three points (air stop accel, float
+  order in air control, the double-jump window); the choices are listed in `PHYSICS_AND_COLLISION.md`.
+- **WASM (`bg_pmove.c`, `bg_slidemove.c`, `wrapper.c`).**
+  - `SetPromode` sets `pm_promode`.
+  - CPM rules: ground accel 15; strafe key alone in the air gets accel 70 with the wishspeed capped to 30; accelerating
+    against the velocity uses 2.5; forward or back alone gets air control; ramp jumps; double jump +100 within 400 ms;
+    step-ups while rising inside the window.
+  - Checked on dhoni: double jump 364 inside the window, 264 outside, ramp add 269.
+- **Chooser.**
+  - `strafe.js` (`state.cpm`) and oDFe `cl_snapyaw.c` (`cpm` argument) model all of it.
+  - JS = WASM bit for bit on 140k frames. Chooser = brute force on 192 frames. C = JS on 20k cases, 10k of them CPM.
+  - Extra seeds for the 2.5 circle, and a finer grid (256) for air control, whose outcome curves back on itself.
+- **Optimizer.**
+  - CPM ground accel; turn radius v² / 2100.
+  - In the air it also tries the strafe key alone and, when turning counts (λ > 0), forward alone.
+  - dhoni first leg: 292 frames / 783 ups (VQ3 unchanged at 322 / 749). The flat-floor 90° turn: 327 frames (VQ3 474).
+  - About 7× slower than VQ3.
+- **Scripts and exports.**
+  - `runScript(..., cpm)`. The new `scriptphysics vq3|cpm` errors if it doesn't match the Physics menu; `df_promode` in
+    a script is an error.
+  - Exports name the physics, tell you which `df_promode` to set, and start with `scriptphysics`.
+- **oDFe (`cl_input.c`).**
+  - The bots read `PMF_PROMODE` (`pm_flags` 0x8000, like the proxymod HUD and erbot) and pass it to the chooser.
+  - `scriptphysics` stops a playing script when the game runs the other physics.
+  - `df_promode` is no longer a warned-about setting.
+  - Rebuilt with MinGW.
+- **Viewer.**
+  - Physics menu in the controls panel, used by scripts, the optimizer worker, the frame editor (shared WASM) and
+    exports.
+  - Switching the physics drops the last route's export.
+- **Not checked in game.**
+
+---
+
 ## 2026-10-13 — Vectors, camera, DeFRaG race timer
 
 - **Vectors (`viewer3d-v2.js`).**

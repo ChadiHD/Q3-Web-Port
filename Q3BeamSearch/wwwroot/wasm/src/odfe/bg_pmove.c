@@ -47,6 +47,7 @@ float	pm_flightfriction = 3.0f;
 float	pm_spectatorfriction = 5.0f;
 
 int		c_pmove = 0;
+int		pm_promode = 0;
 
 
 /*
@@ -378,7 +379,23 @@ static qboolean PM_CheckJump( void ) {
 	pm->ps->pm_flags |= PMF_JUMP_HELD;
 
 	pm->ps->groundEntityNum = ENTITYNUM_NONE;
-	pm->ps->velocity[2] = JUMP_VELOCITY;
+	if ( pm_promode ) {
+		// CPM: jumping while going up (a ramp) adds to the speed, and a jump within 400 msec of the
+		// jump that opened the window adds 100 more (double jump; it doesn't reopen the window)
+		const int sinceJump = pm->cmd.serverTime - pm->ps->stats[STAT_CPM_LASTJUMP];
+		if ( pm->ps->velocity[2] > 0 ) {
+			pm->ps->velocity[2] += JUMP_VELOCITY;
+		} else {
+			pm->ps->velocity[2] = JUMP_VELOCITY;
+		}
+		if ( sinceJump > 0 && sinceJump <= CPM_JUMP_WINDOW ) {
+			pm->ps->velocity[2] += CPM_DOUBLEJUMP;
+		} else {
+			pm->ps->stats[STAT_CPM_LASTJUMP] = pm->cmd.serverTime;
+		}
+	} else {
+		pm->ps->velocity[2] = JUMP_VELOCITY;
+	}
 	PM_AddEvent( EV_JUMP );
 
 	if ( pm->cmd.forwardmove >= 0 ) {
@@ -594,6 +611,35 @@ static void PM_FlyMove( void ) {
 
 /*
 ===================
+PM_CPMAirControl
+
+CPM: with forward or back alone, turn the horizontal velocity toward the wish
+direction without changing its length (Opensource Defrag q3a_AirControl).
+===================
+*/
+static void PM_CPMAirControl( const vec3_t wishdir ) {
+	float	zspeed, speed, dot, k;
+	int		i;
+
+	zspeed = pm->ps->velocity[2];
+	pm->ps->velocity[2] = 0;
+	speed = VectorNormalize( pm->ps->velocity );
+	dot = DotProduct( pm->ps->velocity, wishdir );
+	if ( dot > 0 ) {	// can't turn while slowing down
+		k = 32 * CPM_AIRCONTROL * ( dot * dot ) * pml.frametime;
+		for ( i = 0; i < 2; i++ ) {
+			pm->ps->velocity[i] = pm->ps->velocity[i] * speed + wishdir[i] * k;
+		}
+		VectorNormalize( pm->ps->velocity );
+	}
+	for ( i = 0; i < 2; i++ ) {
+		pm->ps->velocity[i] *= speed;
+	}
+	pm->ps->velocity[2] = zspeed;
+}
+
+/*
+===================
 PM_AirMove
 
 ===================
@@ -633,6 +679,21 @@ static void PM_AirMove( void ) {
 	wishspeed = VectorNormalize(wishdir);
 	wishspeed *= scale;
 
+	if ( pm_promode ) {
+		// CPM: strafe keys alone turn hard (wishspeed 30, accel 70), accelerating against the
+		// velocity uses 2.5, and forward or back alone steers (air control)
+		float accel = DotProduct( pm->ps->velocity, wishdir ) < 0 ? CPM_AIRSTOPACCEL : pm_airaccelerate;
+		if ( fmove == 0 && smove != 0 ) {
+			if ( wishspeed > CPM_AIRWISHSPEED ) {
+				wishspeed = CPM_AIRWISHSPEED;
+			}
+			accel = CPM_AIRSTRAFEACCEL;
+		}
+		PM_Accelerate( wishdir, wishspeed, accel );
+		if ( fmove != 0 && smove == 0 ) {
+			PM_CPMAirControl( wishdir );
+		}
+	} else
 	// not on ground, so little effect on velocity
 	PM_Accelerate (wishdir, wishspeed, pm_airaccelerate);
 
@@ -769,7 +830,9 @@ static void PM_WalkMove( void ) {
 
 	// when a player gets hit, they temporarily lose
 	// full control, which allows them to be moved a bit
-	if ( ( pml.groundTrace.surfaceFlags & SURF_SLICK ) || pm->ps->pm_flags & PMF_TIME_KNOCKBACK ) {
+	if ( pm_promode ) {
+		accelerate = CPM_ACCELERATE;	// slick and knockback too
+	} else if ( ( pml.groundTrace.surfaceFlags & SURF_SLICK ) || pm->ps->pm_flags & PMF_TIME_KNOCKBACK ) {
 		accelerate = pm_airaccelerate;
 	} else {
 		accelerate = pm_accelerate;

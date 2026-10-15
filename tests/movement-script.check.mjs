@@ -67,3 +67,14 @@ console.log(`ok +snapbot: ${n} frames, ${ups.toFixed(0)} ups, curved ${(turned *
 // +strafebot (CGaz) runs too, and never beats the snap bot by much
 const s = run('+strafebot; +forward; +left; +autojump; wait 400');
 console.log(`ok +strafebot: ${speed(s, s.inputs.length - 1).toFixed(0)} ups (snapbot ${ups.toFixed(0)})`);
+
+// CPM: scriptphysics must match, df_promode can't change mid-map, and +snapbot with a strafe
+// key alone sidestrafes (accel 70 up to 30): a far tighter turn than VQ3 from the same start
+assert.match(run('scriptphysics cpm; wait').error, /line 1: the script is for CPM: switch Physics to CPM/);
+assert.equal(runScript('scriptphysics cpm; +forward; wait', flatFloorQ3(), null, true).error, null);
+assert.match(run('set df_promode 1').error, /df_promode only changes with the map/);
+const side = '+forward; wait 40; +autojump; wait 20; -forward; +snapbot; +moveleft; wait 60';
+const endHeading = res => { const v = res.replay.velocities.at(-1); return Math.atan2(v.y, v.x) * 180 / Math.PI; };
+const [vq3Turn, cpmTurn] = [false, true].map(c => endHeading(runScript(side, flatFloorQ3(), null, c)));
+assert.ok(cpmTurn > vq3Turn + 30, `CPM sidestrafe turned to ${cpmTurn.toFixed(1)}°, VQ3 ${vq3Turn.toFixed(1)}°`);
+console.log(`ok cpm: scriptphysics, df_promode, sidestrafe turns to ${cpmTurn.toFixed(1)}° (VQ3 ${vq3Turn.toFixed(1)}°)`);
