@@ -5,6 +5,43 @@ give future maintainers (human or AI) the *why*, not just the *what*.
 
 ---
 
+## 2026-10-15 (later) — Repo clean-up; stats dashboard linked from the viewer
+
+- **Removed: `Q3BeamSearch.Console`** (the original C# beam-search experiments).
+  - The web project only used it for `Vec3` and its C# physics port, which simulated `.cfg` demos server-side.
+    That port isn't the real Pmove, and it read `wait` differently from the game.
+  - Also removed with it:
+    - `CfgDemoService`, `FrameDto`, `PhysicsService` (fully commented out);
+    - the `/demo/{file}`, `/demo/{file}/stats` and `/convert-cfg` endpoints. The two file endpoints had the path
+      traversal noted in BOT_PLAN;
+    - the startup `.cfg` conversion;
+    - the CORS policy (any origin, with credentials; nothing cross-origin uses the server);
+    - all NuGet packages (unused).
+- **Removed, unused:**
+  - `js/viewer3d.js`: the v1 3D viewer. Its page was already gone, and the dashboard's 3D View pointed at it.
+  - `html/frame-editor.html`: an orphan fragment; v2 builds its own.
+  - `wwwroot/cm_trace.c`: a stray copy.
+  - `wwwroot/.github/prompts/…`: an old prompt, which was being served publicly.
+  - `demos/movement.cfg`: needed the C# physics.
+  - `wasm/output/` from git: build output, now ignored. `js/q3physics.*` is the shipped copy.
+  - The nested `Q3BeamSearch.Web/Q3BeamSearch.Web.csproj`, `README_CFG_Integration.md`, a stray screenshot.
+  - The solution's Console project and its link to a file in Downloads.
+- **`main.pdf` out of git** ("Quake III DeFRaG Physics", cited in BOT_PLAN). It's downloaded from the web, so there's
+  only a local copy in `docs/`.
+- **Deleted locally (never in git):** `References/cl_tas.*`, `cl_input.c`, `bg_snapzones.*`, `q3physics_wrapper.c`
+  (superseded by the oDFe work) and `erbot.7z`. The findings are in ERBOT_ANALYSIS.md. `References/` keeps `oDFe` and
+  `defrag`.
+- **`Q3BeamSearch.Web.csproj`** excludes `References/**` (the local engine trees) from the build.
+- **Stats dashboard:** `index.html` → `stats.html`, kept.
+  - The viewer's new **📊 Stats** button hands it the loaded run (`localStorage` `q3StatsRun`) and opens
+    `stats.html?run=viewer`. Its new "Viewer run" button reloads that run.
+  - Saved runs (`demos/*.json`) are fetched as static files, and the stats are computed in the page.
+  - **3D View** opens the v2 viewer.
+  - Its unused WASM load is gone: it never called the physics, only `SetPlayerSpeed` / `SetGravity`.
+  - Chart.js is pinned to 4.4.1.
+
+---
+
 ## 2026-10-15 — C chooser in the WASM, hitbox reach, waypoint editing, player hitbox
 
 - **Yaw chooser in C.** The optimizer's per-frame chooser now runs `cl_snapyaw.c` inside `q3physics.wasm` (export

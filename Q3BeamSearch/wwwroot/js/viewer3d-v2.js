@@ -940,6 +940,15 @@ function setupViewerControls() {
         toast(V.cpm ? 'Physics: CPM (df_promode 1), run again to apply' : 'Physics: VQ3, run again to apply');
     });
 
+    // Stats: hand the loaded run to the statistics dashboard (stats.html) through localStorage
+    document.getElementById('btnStats')?.addEventListener('click', () => {
+        if (!V.currentFrames.length) { toast('No run to show: load a demo, or run a script or the optimizer'); return; }
+        try {
+            localStorage.setItem('q3StatsRun', JSON.stringify({ name: `${V.currentMapData?.mapName || 'map'} run`, frames: V.currentFrames }));
+        } catch { toast('Run too large to hand to the dashboard'); return; }
+        window.open('../stats.html?run=viewer', '_blank');
+    });
+
     // Optimizer
     document.getElementById('btnOptimize')?.addEventListener('click', toggleOptimizer);
     document.getElementById('btnRunOptimizer')?.addEventListener('click', runOptimizer);

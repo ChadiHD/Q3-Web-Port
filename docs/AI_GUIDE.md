@@ -8,8 +8,9 @@ knowledge that isn't obvious from the code.
 - This is a **browser Quake 3 movement/TAS viewer**. Maps render with Three.js; movement is
   the **real Q3 `Pmove` code compiled to WASM** (do not "helpfully" rewrite physics in JS).
 - All browser code and the WASM build live under `Q3BeamSearch/wwwroot/`.
-- **Work on the v2 viewer** (`js/viewer3d-v2.js` + `html/viewer3d-v2.html`), not the legacy
-  `viewer3d.js`, unless explicitly asked.
+- The **3D viewer** is `js/viewer3d-v2.js` + `html/viewer3d-v2.html` (the site opens there).
+  `stats.html` is the separate run statistics dashboard (the v1 page, Chart.js); the user still
+  uses it, so keep it working.
 - Read [ARCHITECTURE.md](./ARCHITECTURE.md) and [PHYSICS_AND_COLLISION.md](./PHYSICS_AND_COLLISION.md)
   before non-trivial changes.
 
@@ -24,8 +25,9 @@ knowledge that isn't obvious from the code.
 | Collision (traces hitting geometry) | `wasm/src/cm/` (ported ioq3 CM) |
 | Engine services the CM needs | `wasm/src/cm/cm_bridge.c` + `wasm/src/cm/qcommon.h` shim |
 | Exposed WASM functions | `wasm/src/wrapper.c` + `EXPORTED_FUNCTIONS` in `wasm/build.ps1` |
-| Route optimisation | `js/waypoint-optimizer.js` |
-| Server endpoints / demo conversion | `Q3BeamSearch/Program.cs`, `Services/CfgDemoService.cs` |
+| Route optimisation | `js/waypoint-optimizer.js`, `js/optimizer-worker.js` (worker pool), `wasm/src/odfe/cl_snapyaw.c` (yaw chooser) |
+| Run statistics dashboard | `stats.html` (viewer hand-off: `localStorage` `q3StatsRun`, 📊 Stats in `viewer3d-v2.js`) |
+| Server endpoints | `Q3BeamSearch/Program.cs` |
 
 ## Environment gotchas (these bit us; they'll bite you)
 
@@ -83,10 +85,7 @@ knowledge that isn't obvious from the code.
   actively wrong).
 
 - **Security:** the `/api/map-proxy` endpoint is host-locked to `defrag.racing` and
-  filename-sanitised on purpose (anti-SSRF / traversal). Preserve that. The offline Python
-  scripts (`wwwroot/python/*.py`) use `zipfile.extractall` on untrusted archives — a Zip
-  Slip risk if ever run server-side; guard members before extracting if you touch them.
-  (They are **not** used by the v2 viewer.)
+  filename-sanitised on purpose (anti-SSRF / traversal). Preserve that.
 
 ## Good working pattern for physics/collision changes
 
@@ -100,10 +99,12 @@ knowledge that isn't obvious from the code.
 
 ## Things that look like bugs but aren't
 
-- Two viewers exist (`viewer3d.js` v1, `viewer3d-v2.js` v2). This is intentional; v2 is
-  current.
+- Two pages exist (`html/viewer3d-v2.html`, `stats.html`). This is intentional: the 3D
+  workbench and the statistics dashboard.
 - The JS collision system (`collision-detection.js`, `slide-move.js`) coexists with the WASM
   collision model. Intentional — JS handles pre-recorded demo replay; WASM handles live
   physics. See the design note in
   [PHYSICS_AND_COLLISION.md](./PHYSICS_AND_COLLISION.md#design-note-the-js-collision-system-was-kept).
-- `References/ioq3-main/` is a full upstream Q3 tree kept for reference; it is not built.
+- `Q3BeamSearch/References/` (local only, not in git) holds the user's oDFe engine tree (built
+  separately with MinGW) and Opensource Defrag (the CPM reference). The web build ignores it
+  (`Q3BeamSearch.Web.csproj`).

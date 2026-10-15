@@ -253,9 +253,11 @@ set cl_scriptRun 1; set fixedtime 8; set com_maxfps 125
 
 ## Out of scope
 - CPM (not in oDFe source). Done later (2026-10-13): see `docs/PHYSICS_AND_COLLISION.md` and the changelog.
-- C# optimizer/exporter (kept).
-- cl_tas (left as is, superseded).
-- Path traversal in `/convert-cfg` and `/demo/{fileName}` (flag separately).
+- C# optimizer/exporter (kept). Removed on 2026-10-15 with the rest of `Q3BeamSearch.Console`.
+- cl_tas (left as is, superseded). The old reference files (`References/cl_tas.*`, `References/cl_input.c`,
+  `References/bg_snapzones.*`) were deleted on 2026-10-15; the engine work lives in `References/oDFe`.
+- Path traversal in `/convert-cfg` and `/demo/{fileName}` (flag separately). Gone on 2026-10-15: both endpoints
+  were removed, and the dashboard fetches saved runs as static files.
 
 ## Input from the erbot analysis
 Suggestions from [ERBOT_ANALYSIS.md](./ERBOT_ANALYSIS.md):

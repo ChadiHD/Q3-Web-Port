@@ -66,23 +66,18 @@ dotnet run
 ```
 
 Then open the URL it prints (see `Properties/launchSettings.json` for the configured port).
-`index.html` is the landing page; the current 3D viewer is at `html/viewer3d-v2.html`.
+`/` redirects to the 3D viewer, `html/viewer3d-v2.html`. The statistics dashboard is
+`stats.html`; it lists the `.json` runs in `wwwroot/demos`, and the viewer's 📊 Stats button
+opens the loaded run in it.
 
-The server auto-converts any `.cfg` demos under `wwwroot/demos` to JSON on startup
-(`CfgDemoService`).
-
-## 3. The .NET console tool (optional, offline)
-
-`Q3BeamSearch.Console` is the original route-search / TAS experiment and is independent of
-the web app.
+## 3. Tests
 
 ```powershell
-cd Q3BeamSearch.Console
-dotnet run
+foreach ($t in Get-ChildItem tests/*.check.mjs) { node $t }
 ```
 
-It exports Q3 `.cfg` scripts (`Export/Q3CfgExporter.cs`) that can then be dropped into
-`wwwroot/demos` and viewed in the browser.
+Plain Node, no packages. `tests/snapyaw-wasm.check.mjs` also needs a Node build of the WASM
+(see above); without one it skips.
 
 ## Smoke test after a WASM rebuild
 

@@ -38,3 +38,6 @@ node_modules/
 Thumbs.db
 Desktop.ini
 .DS_Store
+
+# WASM build output (build.ps1 copies it to wwwroot/js, which is tracked)
+Q3BeamSearch/wwwroot/wasm/output/

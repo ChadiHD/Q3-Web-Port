@@ -2,52 +2,41 @@
 
 ## Solution layout
 
-The repository root is `Q3WebPort/`. It contains two .NET projects plus the web assets.
+The repository root is `Q3WebPort/`. It contains one ASP.NET Core project (a static-file
+server for the browser app), the browser code, the WASM build, the tests and these docs.
 
 ```
 Q3WebPort/
 ├─ docs/                        ← this folder
-├─ Q3BeamSearch/                ← ASP.NET Core web project (serves the viewer)
-│  ├─ Program.cs                ← minimal-API server: static files + a few endpoints
-│  ├─ Services/
-│  │  ├─ CfgDemoService.cs      ← converts Q3 .cfg demos → JSON frame data
-│  │  └─ PhysicsService.cs
-│  ├─ Models/FrameDto.cs        ← frame data shape sent to the browser
-│  └─ wwwroot/                  ← ALL the browser code + the WASM build lives here
-│     ├─ index.html             ← landing page: demo list, charts, 2D playback
-│     ├─ html/viewer3d-v2.html  ← current 3D viewer page
-│     ├─ html/viewer3d.html     ← legacy 3D viewer page
-│     ├─ js/                    ← ES modules (see below)
-│     ├─ css/
-│     ├─ demos/                 ← sample demo data (.cfg / .json)
-│     └─ wasm/                  ← Emscripten build of the Q3 physics + collision
-│        ├─ build.ps1           ← the build script (runs emcc)
-│        ├─ src/odfe/           ← oDFe (ioq3 fork) Pmove sources + browser stubs
-│        ├─ src/cm/             ← ioq3 collision model, ported for the browser
-│        └─ output/             ← build artifacts (q3physics.js/.wasm), copied to js/
-└─ Q3BeamSearch.Console/        ← original C# route-search / TAS experiments
-   ├─ Program.cs                ← beam-search / differential-evolution driver
-   ├─ Algorithms/               ← search algorithms
-   ├─ Core/ (Q3.cs, Vec3.cs)    ← C# physics + vector math
-   ├─ TAS/FrameScript.cs        ← frame-script model
-   ├─ Export/Q3CfgExporter.cs   ← writes Q3 .cfg scripts
-   └─ References/ioq3-main/     ← FULL upstream ioq3 source (reference only)
+├─ tests/                       ← Node self-checks (node tests/<name>.check.mjs)
+└─ Q3BeamSearch/                ← ASP.NET Core web project (serves the app)
+   ├─ Program.cs                ← minimal-API server: static files + two endpoints
+   ├─ References/               ← local only, not in git: oDFe engine, Opensource Defrag
+   └─ wwwroot/                  ← ALL the browser code + the WASM build lives here
+      ├─ html/viewer3d-v2.html  ← the 3D viewer (the site opens here)
+      ├─ stats.html             ← run statistics dashboard: speed / path / yaw / accel charts
+      ├─ js/                    ← ES modules (see below)
+      ├─ css/
+      ├─ demos/                 ← saved runs (.json) the dashboard lists
+      └─ wasm/                  ← Emscripten build of the Q3 physics + collision
+         ├─ build.ps1           ← the build script (runs emcc)
+         ├─ src/odfe/           ← oDFe (ioq3 fork) Pmove sources, the yaw chooser, browser stubs
+         ├─ src/cm/             ← ioq3 collision model, ported for the browser
+         └─ output/             ← build artifacts (not in git), copied to js/
 ```
 
-> **Note on `References/ioq3-main/`**: this is the upstream Quake 3 source tree kept for
-> reference. The WASM collision model under `wwwroot/wasm/src/cm/` was copied and adapted
-> from `References/ioq3-main/code/qcommon/cm_*.c`. When you need to understand or re-port
-> a collision function, that upstream copy is the source of truth.
+> **Upstream sources**: the WASM collision model under `wwwroot/wasm/src/cm/` was adapted
+> from ioq3's `code/qcommon/cm_*.c`; oDFe (`References/oDFe/code/qcommon`) has the same
+> files. When you need to understand or re-port a collision function, those are the source
+> of truth.
 
 ## The three runtimes
 
 1. **ASP.NET Core web server** (`Q3BeamSearch/Program.cs`)
-   Serves `wwwroot/` as static files (with the correct `application/wasm` MIME type) and
-   exposes a handful of minimal-API endpoints:
-   - `GET /demos` — list demo files under `wwwroot/demos` (`.json` and `.cfg`).
-   - `GET /demo/{fileName}` — return a demo's frames as JSON (converting `.cfg` on demand).
-   - `GET /demo/{fileName}/stats` — summary stats for a demo.
-   - `POST /convert-cfg` — force-convert a `.cfg` to `.json`.
+   Serves `wwwroot/` as static files (with the correct `application/wasm` MIME type, and
+   `Cache-Control: no-cache` so edited ES modules are revalidated) and two endpoints:
+   - `GET /demos` — list the saved runs (`.json`) under `wwwroot/demos` for the dashboard,
+     which then fetches each one as a static file.
    - `GET /api/map-proxy?mapname=<name>.pk3` — server-side proxy that downloads a `.pk3`
      from **defrag.racing** and streams it to the browser. It is deliberately locked to
      that one host and sanitises the filename (`^[\w\-\.]+$`, path separators stripped) to
@@ -62,21 +51,24 @@ Q3WebPort/
    Parses maps, builds the Three.js scene, drives playback and the frame editor, and calls
    into the WASM module for physics.
 
-The **.NET console** project is a separate, offline tool — the original beam-search and
-differential-evolution route optimiser. Its algorithms were later re-implemented in JS
-(`wwwroot/js/waypoint-optimizer.js`) so optimisation can run in the browser against the
-WASM physics. The console app is not part of the web request path.
+The **statistics dashboard** (`stats.html`, the v1 page) charts a run frame by frame. The
+viewer's **📊 Stats** button hands it the loaded run through `localStorage` (`q3StatsRun`)
+and opens `stats.html?run=viewer`. The dashboard's **3D View** button goes the other way
+(`q3DemoData`). The dashboard's analysis is computed from the positions (heuristic); it
+doesn't run the physics.
+
+The original C# console route optimiser was removed on 2026-10-15. Its search lives on,
+rewritten, in `waypoint-optimizer.js` on the real WASM physics.
 
 ## Browser module map (`wwwroot/js/`)
 
 | Module | Responsibility |
 |--------|----------------|
 | `viewer3d-v2.js` | **Current** viewer: app bootstrap, upload gate, camera/fly controls, frame editor, optimiser UI, and the physics/collision wiring. |
-| `viewer3d.js` | Legacy monolithic viewer (v1). |
 | `bsp-loader.js` | Parses `.bsp` / `.pk3` (via JSZip) into geometry + entities; extracts textures & skybox; also returns the **raw BSP bytes** (`rawBsp`) for the WASM collision model. |
 | `collision-detection.js` | A pure-JS BSP box-trace (`BSPCollisionSystem`). Used for the demo-replay post-pass; superseded for live physics by the WASM collision model. |
 | `slide-move.js` | Q3-style slide/clip-velocity helper used by the JS collision post-pass. |
-| `waypoint-system.js` | Waypoint placement (left click), deletion (middle click), import / export. |
+| `waypoint-system.js` | Waypoints: numbered balls (radius, height); place / select-and-resize (left click), delete (middle click); hitbox reach check in playback. |
 | `waypoint-optimizer.js` | VQ3 / CPM route optimiser: a strafe controller plus a beam search, on the WASM physics. It runs in `optimizer-worker.js`, which also starts a pool of helper workers (one per core minus one, up to 16), each with its own WASM instance and map. They simulate each leg's candidates in parallel, and the results are merged in job order, so the route is the same as single-threaded. With DeFRaG timer triggers it can finish in the stop trigger and ranks by race time. In CPM it also tries one-key air frames (sidestrafe, air control). |
 | `strafe.js` | Snap-aware yaw chooser: a bit-exact one-frame Pmove model (VQ3 and CPM), searched over yaw shorts. Its C twin is `cl_snapyaw.c` (one file, in oDFe and in the WASM as `SnapYaw`); the optimizer runs the C one through `PmoveRunner.bestYaw`, the script runner and tests use this one, and `tests/snapyaw-wasm.check.mjs` keeps them picking alike. |
 | `pmove-runner.js` | Steps the WASM Pmove one usercmd at a time (`reset`, `step`, `settle` at the spawn), VQ3 or CPM (`SetPromode`). |

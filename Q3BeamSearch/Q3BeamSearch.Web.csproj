@@ -9,35 +9,13 @@
     <StartupObject>Q3BeamSearch.WebMain</StartupObject>
   </PropertyGroup>
 
+  <!-- References/ holds local engine sources (oDFe, Opensource Defrag) and reference files:
+       not part of the web app, and too big to glob on every build. -->
   <ItemGroup>
-    <Compile Remove="oDFe code\**" />
-    <Content Remove="oDFe code\**" />
-    <EmbeddedResource Remove="oDFe code\**" />
-    <None Remove="oDFe code\**" />
+    <Compile Remove="References\**" />
+    <Content Remove="References\**" />
+    <EmbeddedResource Remove="References\**" />
+    <None Remove="References\**" />
   </ItemGroup>
-
-  <ItemGroup>
-    <Compile Remove="Services\SimulationWorker.cs" />
-  </ItemGroup>
-
-  <ItemGroup>
-    <None Remove="main.pdf" />
-  </ItemGroup>
-
-  <ItemGroup>
-    <ProjectReference Include="..\Q3BeamSearch.Console\Q3BeamSearch.Console.csproj" />
-  </ItemGroup>
-
-    <ItemGroup>
-	    <PackageReference Include="Microsoft.AspNetCore.Components.Web" Version="9.0.0" />
-	    <PackageReference Include="Microsoft.AspNetCore.Components.WebAssembly" Version="9.0.0" />
-	    <PackageReference Include="Microsoft.AspNetCore.SignalR.Client" Version="9.0.0" />
-	    <PackageReference Include="Microsoft.Extensions.Logging.Console" Version="9.0.0" />
-	    <PackageReference Include="Newtonsoft.Json" Version="13.0.3" />
-    </ItemGroup>
-
-    <ItemGroup>
-      <Folder Include="wwwroot\wasm\output\" />
-    </ItemGroup>
 
 </Project>

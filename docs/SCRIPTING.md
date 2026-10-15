@@ -1,7 +1,7 @@
 # Movement scripts
 
 A movement script is a plain Quake 3 cfg. The web viewer's script editor runs it on the WASM Pmove, and the modified
-oDFe (`Q3BeamSearch.Console/References/oDFe`) plays the same file with `scriptplay`. With `cl_scriptRun 1` both
+oDFe (`Q3BeamSearch/References/oDFe`) plays the same file with `scriptplay`. With `cl_scriptRun 1` both
 produce the same usercmds frame for frame:
 - `wwwroot/js/movement-script.js` emulates the engine's `cl_input.c`;
 - `wwwroot/js/strafe.js` and oDFe `code/client/cl_snapyaw.c` are twin angle choosers that agree on every yaw short

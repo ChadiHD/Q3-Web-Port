@@ -1,5 +1,4 @@
-﻿using Microsoft.AspNetCore.StaticFiles;
-using Q3BeamSearch.Services;
+using Microsoft.AspNetCore.StaticFiles;
 using System.Text.RegularExpressions;
 
 namespace Q3BeamSearch
@@ -10,31 +9,17 @@ namespace Q3BeamSearch
         {
             var builder = WebApplication.CreateBuilder(args);
 
-            // Register demo service without SignalR dependency
-            builder.Services.AddSingleton<CfgDemoService>();
             builder.Services.AddHttpClient("defragProxy", c =>
             {
                 c.Timeout = TimeSpan.FromSeconds(60);
                 c.DefaultRequestHeaders.UserAgent.ParseAdd("Q3TASViewer/2.0");
             });
 
-            builder.Services.AddCors(o =>
-            {
-                o.AddDefaultPolicy(p => p
-                    .AllowAnyHeader()
-                    .AllowAnyMethod()
-                    .AllowCredentials()
-                    .SetIsOriginAllowed(_ => true));
-            });
-
             var app = builder.Build();
 
-            app.UseCors();
-
-            // The site opens on the v2 viewer (the legacy page stays at /index.html).
+            // The site opens on the v2 viewer (the run-statistics dashboard is /stats.html).
             // A redirect, not a rewrite, so the page's relative ../js/ paths resolve.
             app.MapGet("/", () => Results.Redirect("/html/viewer3d-v2.html"));
-            app.UseDefaultFiles();
 
             var provider = new FileExtensionContentTypeProvider();
             provider.Mappings[".wasm"] = "application/wasm";
@@ -48,89 +33,13 @@ namespace Q3BeamSearch
                 OnPrepareResponse = ctx => ctx.Context.Response.Headers.CacheControl = "no-cache"
             });
 
-            // Auto-convert CFG files from console app on startup
-            Task.Run(async () =>
-            {
-                await Task.Delay(1000); // Give the app time to start
-                var demoService = app.Services.GetRequiredService<CfgDemoService>();
-                await demoService.ConvertConsoleCfgFiles();
-            });
-
-            // Endpoint to list saved demos under wwwroot/demos - supports both .json and .cfg files
+            // The JSON runs saved under wwwroot/demos, for the stats dashboard's list
+            // (it fetches each one as a static file, /demos/<name>).
             app.MapGet("/demos", () =>
             {
-                var demosDir = Path.Combine(app.Environment.ContentRootPath, "wwwroot", "demos");
+                var demosDir = Path.Combine(app.Environment.WebRootPath, "demos");
                 if (!Directory.Exists(demosDir)) return Results.Json(Array.Empty<string>());
-
-                // Get both JSON and CFG files
-                var jsonFiles = Directory.GetFiles(demosDir, "*.json").Select(Path.GetFileName);
-                var cfgFiles = Directory.GetFiles(demosDir, "*.cfg").Select(Path.GetFileName);
-                var allFiles = jsonFiles.Concat(cfgFiles).Where(f => f != null).OrderByDescending(f => f).ToArray();
-
-                return Results.Json(allFiles);
-            });
-
-            // Endpoint to get demo data for a specific file
-            app.MapGet("/demo/{fileName}", async (string fileName) =>
-            {
-                try
-                {
-                    var demoService = app.Services.GetRequiredService<CfgDemoService>();
-                    var frames = await demoService.GetDemoFrames(fileName);
-                    
-                    if (frames == null || frames.Count == 0)
-                    {
-                        return Results.NotFound($"Demo file '{fileName}' not found or empty");
-                    }
-
-                    return Results.Json(frames);
-                }
-                catch (Exception ex)
-                {
-                    return Results.Problem($"Error loading demo: {ex.Message}");
-                }
-            });
-
-            // Endpoint to manually convert a CFG file
-            app.MapPost("/convert-cfg", async (string fileName) =>
-            {
-                try
-                {
-                    var demoService = app.Services.GetRequiredService<CfgDemoService>();
-                    var demosDir = Path.Combine(app.Environment.ContentRootPath, "wwwroot", "demos");
-                    var cfgPath = Path.Combine(demosDir, fileName);
-
-                    if (!File.Exists(cfgPath) || !fileName.EndsWith(".cfg"))
-                    {
-                        return Results.BadRequest("CFG file not found");
-                    }
-
-                    var jsonFileName = fileName.Replace(".cfg", ".json");
-                    var jsonPath = Path.Combine(demosDir, jsonFileName);
-
-                    await demoService.ConvertCfgToJson(cfgPath, jsonPath);
-
-                    return Results.Ok(new { message = $"Converted {fileName} to {jsonFileName}" });
-                }
-                catch (Exception ex)
-                {
-                    return Results.Problem($"Error converting CFG: {ex.Message}");
-                }
-            });
-
-            // Simple endpoint to get demo statistics
-            app.MapGet("/demo/{fileName}/stats", async (string fileName) =>
-            {
-                try
-                {
-                    var demoService = app.Services.GetRequiredService<CfgDemoService>();
-                    var stats = await demoService.GetDemoStats(fileName);
-                    return Results.Json(stats);
-                }
-                catch (Exception ex)
-                {
-                    return Results.Problem($"Error getting demo stats: {ex.Message}");
-                }
+                return Results.Json(Directory.GetFiles(demosDir, "*.json").Select(Path.GetFileName).OrderByDescending(f => f).ToArray());
             });
 
             // Proxy endpoint: fetches a .pk3 from defrag.racing and streams it to the client.

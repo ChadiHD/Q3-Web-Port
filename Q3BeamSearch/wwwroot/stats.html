@@ -3,10 +3,8 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Q3 Movement Demo Viewer</title>
-    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
-    <!-- Q3 Physics WebAssembly Module -->
-    <script src="js/q3physics.js"></script>
+    <title>Q3 Run Statistics</title>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
     <style>
         body {
             font-family: Arial, sans-serif;
@@ -394,15 +392,16 @@
     </div>
 
     <div class="container">
-        <h1>Q3 Movement Demo Viewer</h1>
+        <h1>Q3 Run Statistics</h1>
 
         <div class="controls">
-            <h3>Demo Selection</h3>
+            <h3>Run</h3>
             <select id="demoList">
-                <option value="">Select a demo...</option>
+                <option value="">Select a saved run...</option>
             </select>
-            <button id="btnLoad">Load Demo</button>
+            <button id="btnLoad">Load</button>
             <button id="btnRefresh">Refresh List</button>
+            <button id="btnViewerRun" title="The run last sent from the 3D viewer's Stats button">Viewer run</button>
             <button id="btn3DView" style="background: #4fc3f7; color: #000; margin-left: 20px;" disabled>🎮 3D View</button>
             <button id="btnExportJSON" style="background: #66bb6a; color: #000; margin-left: 10px;" disabled>📥 Export JSON</button>
             <span id="status" class="status">Ready</span>
@@ -414,7 +413,7 @@
         </div>
 
         <div id="statsContainer" class="stats" style="display: none;">
-            <h3>Demo Statistics</h3>
+            <h3>Run Statistics</h3>
             <div id="statsContent" class="info"></div>
         </div>
 
@@ -461,37 +460,10 @@
         let isPlaying = false;
         let playbackInterval = null;
 
-        // Q3 Physics Integration
-        let Q3Physics = null;
-        let physicsInitialized = false;
-
-        // Initialize Q3 Physics WebAssembly module
-        async function initQ3Physics() {
-            try {
-                console.log('Initializing Q3 Physics WebAssembly module...');
-                Q3Physics = await Q3PhysicsModule();
-                physicsInitialized = true;
-                console.log('Q3 Physics initialized successfully');
-                console.log('Available functions:', ['PmoveSingle', 'SetPlayerSpeed', 'SetGravity', 
-                    'GetPlayerPosition', 'GetPlayerVelocity', 'GetPlayerHorizontalSpeed']);
-
-                // Set default physics parameters
-                Q3Physics.ccall('SetPlayerSpeed', null, ['number'], [320]);
-                Q3Physics.ccall('SetGravity', null, ['number'], [800]);
-
-                return true;
-            } catch (error) {
-                console.error('Failed to initialize Q3 Physics:', error);
-                return false;
-            }
-        }
-
-        // ============================================================
-        // PROPERLY USE Q3 PHYSICS WEBASSEMBLY
-        // ============================================================
+        // Per-frame movement analysis from the positions (velocity, acceleration, wish angle,
+        // strafe efficiency). Heuristic: it doesn't run the physics.
         function calculateAccuratePhysics(frameIndex) {
-            // Fallback check
-            if (!physicsInitialized || !Q3Physics || frameIndex < 1 || frameIndex >= currentFrames.length) {
+            if (frameIndex < 1 || frameIndex >= currentFrames.length) {
                 return calculateFallbackPhysics(frameIndex);
             }
 
@@ -506,7 +478,6 @@
                 const velY = (currFrame.y - prevFrame.y) / dt;
                 const velZ = (currFrame.z - prevFrame.z) / dt;
 
-                // Use Q3 WASM for horizontal speed calculation
                 const horizontalSpeed = Math.sqrt(velX * velX + velY * velY);
 
                 // Calculate movement angles
@@ -553,8 +524,7 @@
                     magnitude: accelMagnitude,
                     wishAngle: wishVelAngleDiff,
                     efficiency: efficiency,
-                    horizontalSpeed: horizontalSpeed,
-                    q3Enhanced: true
+                    horizontalSpeed: horizontalSpeed
                 };
 
             } catch (error) {
@@ -563,45 +533,9 @@
             }
         }
 
-        // Fallback physics when WASM is not available
-        function calculateFallbackPhysics(frameIndex) {
-            if (frameIndex < 1 || frameIndex >= currentFrames.length) {
-                return { 
-                    magnitude: 0, 
-                    wishAngle: 0, 
-                    efficiency: 0, 
-                    horizontalSpeed: 0,
-                    q3Enhanced: false 
-                };
-            }
-
-            const prevFrame = currentFrames[frameIndex - 1];
-            const currFrame = currentFrames[frameIndex];
-            const dt = 1.0 / 125.0;
-
-            // Basic velocity calculations
-            const velX = (currFrame.x - prevFrame.x) / dt;
-            const velY = (currFrame.y - prevFrame.y) / dt;
-            const horizontalSpeed = Math.sqrt(velX * velX + velY * velY);
-            const velocityAngle = Math.atan2(velY, velX);
-
-            // Simplified wish angle calculation
-            const optimalWishAngle = velocityAngle + (Math.PI / 6);
-
-            // Basic acceleration
-            const velPrevX = frameIndex < 2 ? 0 : (prevFrame.x - currentFrames[frameIndex - 2].x) / dt;
-            const velPrevY = frameIndex < 2 ? 0 : (prevFrame.y - currentFrames[frameIndex - 2].y) / dt;
-            const accelX = velX - velPrevX;
-            const accelY = velY - velPrevY;
-            const accelMagnitude = Math.sqrt(accelX * accelX + accelY * accelY);
-
-            return { 
-                magnitude: accelMagnitude,
-                wishAngle: 0, 
-                efficiency: 50, 
-                horizontalSpeed: horizontalSpeed,
-                q3Enhanced: false 
-            };
+        // First frame (no previous one) and out-of-range frames: nothing to measure
+        function calculateFallbackPhysics() {
+            return { magnitude: 0, wishAngle: 0, efficiency: 0, horizontalSpeed: 0 };
         }
 
         // Enhanced frame details with accurate physics
@@ -621,19 +555,9 @@
             const velMagnitude = Math.sqrt(velX * velX + velY * velY);
             const velAngle = Math.atan2(velY, velX) * 180 / Math.PI;
 
-            // Use accurate Q3 physics calculations
             const physicsData = calculateAccuratePhysics(currentFrame);
 
-            // Display physics status
-            const physicsStatus = physicsData.q3Enhanced ? 
-                '<span style="color: #4caf50;">Q3 WASM ✓</span>' : 
-                '<span style="color: #ff9800;">Fallback</span>';
-
             container.innerHTML = `
-                <div class="frame-detail">
-                    <div class="label">Physics</div>
-                    <div class="value">${physicsStatus}</div>
-                </div>
                 <div class="frame-detail">
                     <div class="label">Frame</div>
                     <div class="value">${frame.frame}</div>
@@ -887,7 +811,7 @@
                 const demos = await response.json();
 
                 const select = document.getElementById('demoList');
-                select.innerHTML = '<option value="">Select a demo...</option>';
+                select.innerHTML = '<option value="">Select a saved run...</option>';
 
                 demos.forEach(demo => {
                     const option = document.createElement('option');
@@ -903,49 +827,57 @@
             }
         }
 
+        // A saved run: wwwroot/demos/<fileName>, a JSON array of frames
         async function loadDemo(fileName) {
             if (!fileName) return;
-
             try {
-                setStatus('Loading demo data...', 'loading');
-                stopPlayback();
-
-                // Load demo frames
-                const response = await fetch(`/demo/${encodeURIComponent(fileName)}`);
-                if (!response.ok) {
-                    throw new Error(`HTTP ${response.status}: ${response.statusText}`);
-                }
-
-                currentFrames = await response.json();
-
-                // Load demo stats
-                const statsResponse = await fetch(`/demo/${encodeURIComponent(fileName)}/stats`);
-                const stats = await statsResponse.json();
-
-                // Update charts
-                updateCharts(currentFrames);
-
-                // Update stats display
-                updateStats(stats);
-
-                // Setup frame controls
-                setupFrameControls();
-
-                // Go to first frame
-                setCurrentFrame(0);
-
-                // Enable 3D View button when demo is loaded
-                document.getElementById('btn3DView').disabled = false;
-
-                // Enable Export JSON button when demo is loaded
-                document.getElementById('btnExportJSON').disabled = false;
-
-                setStatus(`Loaded ${currentFrames.length} frames`, 'ok');
-
+                setStatus('Loading run...', 'loading');
+                const response = await fetch(`/demos/${encodeURIComponent(fileName)}`);
+                if (!response.ok) throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+                showRun(await response.json(), fileName);
             } catch (error) {
-                setStatus('Error loading demo', 'error');
-                console.error('Error loading demo:', error);
+                setStatus('Error loading run', 'error');
+                console.error('Error loading run:', error);
             }
+        }
+
+        // The run the 3D viewer's Stats button handed over (localStorage q3StatsRun: {name, frames})
+        function loadViewerRun() {
+            let run = null;
+            try { run = JSON.parse(localStorage.getItem('q3StatsRun')); } catch { /* unreadable */ }
+            if (!run?.frames?.length) { setStatus('No run from the viewer yet: press Stats in the 3D viewer', 'error'); return; }
+            showRun(run.frames, run.name || 'viewer run');
+        }
+
+        // Frames: [{frame, x, y, z, speed, onGround, yawDeg, forwardMove, rightMove, upMove}], 125 per second
+        function showRun(frames, label) {
+            stopPlayback();
+            currentFrames = frames;
+            updateCharts(currentFrames);
+            updateStats(computeStats(currentFrames));
+            setupFrameControls();
+            setCurrentFrame(0);
+            document.getElementById('btn3DView').disabled = false;
+            document.getElementById('btnExportJSON').disabled = false;
+            setStatus(`${label}: ${currentFrames.length} frames`, 'ok');
+        }
+
+        function computeStats(frames) {
+            const first = frames[0], last = frames.at(-1);
+            let jumps = 0, wasJumping = false;
+            for (const f of frames) {
+                const jumping = f.upMove > 0;   // a new jump press: upmove going from 0 to positive
+                if (jumping && !wasJumping) jumps++;
+                wasJumping = jumping;
+            }
+            return {
+                totalFrames: frames.length,
+                duration: `${(frames.length / 125).toFixed(2)}s`,
+                maxSpeed: `${frames.reduce((m, f) => Math.max(m, f.speed ?? 0), 0).toFixed(1)} ups`,
+                finalSpeed: `${(last.speed ?? 0).toFixed(1)} ups`,
+                totalDistance: `${Math.hypot(last.x - first.x, last.y - first.y).toFixed(1)} units`,
+                jumps
+            };
         }
 
         function setupFrameControls() {
@@ -1225,14 +1157,13 @@
         });
 
         document.getElementById('btnRefresh').addEventListener('click', loadDemos);
+        document.getElementById('btnViewerRun').addEventListener('click', loadViewerRun);
 
-        // Add 3D View button functionality
+        // 3D View: the 3D viewer picks these frames up once a map is loaded
         document.getElementById('btn3DView').addEventListener('click', () => {
             if (currentFrames && currentFrames.length > 0) {
-                // Store current demo data in localStorage for 3D viewer
                 localStorage.setItem('q3DemoData', JSON.stringify(currentFrames));
-                // Open 3D viewer in new tab
-                window.open('html/viewer3d.html', '_blank');
+                window.open('html/viewer3d-v2.html', '_blank');
             }
         });
 
@@ -1561,20 +1492,9 @@
         // Initialize on load
         initializeYawCompass();
 
-        // Initialize Q3 Physics and then load demos
-        initQ3Physics().then((success) => {
-            if (success) {
-                console.log('Q3 Physics WebAssembly integration successful');
-                setStatus('Q3 Physics initialized - Ready', 'ok');
-            } else {
-                console.warn('Q3 Physics initialization failed, using fallback calculations');
-                setStatus('Using fallback physics - Ready', 'loading');
-            }
-            loadDemos();
-        }).catch(() => {
-            console.warn('Q3 Physics not available, using fallback calculations');
-            setStatus('Using fallback physics - Ready', 'loading');
-            loadDemos();
+        // Opened from the 3D viewer's Stats button (?run=viewer): show that run, else list the saved ones
+        loadDemos().then(() => {
+            if (new URLSearchParams(location.search).get('run') === 'viewer') loadViewerRun();
         });
     </script>
 </body>

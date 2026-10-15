@@ -1,8 +1,9 @@
 # erbot ("Edge Runner") — reverse-engineering notes
 
-`Q3BeamSearch.Console/References/erbot.7z` holds `erbot.exe`, a closed-source Quake 3 movement bot that DeFRaG
-players rate highly. These notes record how it works so our own bot (see [BOT_PLAN.md](./BOT_PLAN.md)) can learn from
-it. Analysed 2026-10-12 with static analysis only: the exe was never run.
+`erbot.7z` held `erbot.exe`, a closed-source Quake 3 movement bot that DeFRaG players rate highly. These notes record
+how it works so our own bot (see [BOT_PLAN.md](./BOT_PLAN.md)) can learn from it. Analysed 2026-10-12 with static
+analysis only: the exe was never run. The archive was deleted from the machine on 2026-10-15. To repeat the analysis,
+get it again (SHA-256 below) and follow "How the analysis was done".
 
 The full decompiled output stayed out of the repo. In the bot's about text the authors say they don't want to distribute
 the program, and they ask that it not be used to cheat. What's here is a description of the algorithms, the constants

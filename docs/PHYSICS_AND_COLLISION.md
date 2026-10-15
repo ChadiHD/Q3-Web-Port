@@ -50,7 +50,7 @@ JS-side runtime methods exported: `ccall`, `cwrap`, `getValue`, `setValue`, `HEA
 
 ## CPM (DeFRaG `df_promode 1`)
 
-DeFRaG is closed source, so CPM is rebuilt from two references in `Q3BeamSearch.Console/References/defrag`:
+DeFRaG is closed source, so CPM is rebuilt from two references in `Q3BeamSearch/References/defrag`:
 - **Opensource Defrag** (`src/game/sgame/phy/q3a.c`, `core.c`, `slidemove.c`), a remake that aims to match DeFRaG 1:1;
 - the **proxymod HUD** constants (`src/game/cgame/hud/wip/bg_local.h`), reverse engineered from DeFRaG.
 
