@@ -5,6 +5,92 @@ give future maintainers (human or AI) the *why*, not just the *what*.
 
 ---
 
+## 2026-10-16 — .dm_68 demos load; the race timer starts on the first touch
+
+- **`.dm_68` demos didn't load.** The 🎬 Demo button accepted `.dm_68`, but `handleDemoUpload` only ran
+  `JSON.parse`, so any real demo failed with "Failed to parse demo file".
+- **New `js/dm68.js`**, a protocol 68 demo reader ported from oDFe:
+  - **Huffman:** `huffman_static.c`. Its 2048-entry decode table is rebuilt from the 256-entry encode table, and
+    the rebuilt table was checked to equal the C one.
+  - **Messages:** `msg.c`'s `MSG_ReadBits` and string reads, and `MSG_ReadDeltaPlayerstate` with its field table.
+  - **Parsing:** `cl_parse.c`'s server message, gamestate (configstrings) and snapshot parsing. Snapshots delta
+    from earlier messages.
+  - **Skipped:** entities aren't decoded; the player state comes before them.
+  - **Output:** `demoFrames` gives viewer frames, one per 8 ms of the player's `commandTime`. It drops snapshots
+    with no new command and interpolates gaps. It keeps the run from the first `PM_NORMAL` snapshot to DeFRaG's
+    finish freeze.
+  - **DeFRaG extras:** the keys come from `ps.stats[13]` and the timer from `stats[8]`. The key bits were read off
+    the demo against `movementDir` and the jumps: forward 1, left 8, right 16, jump 32. Back = 2 is assumed; it's
+    never held in that demo.
+  - **Viewer:** loads the frames as recorded (no JS re-clip). It switches Physics to the demo's `df_promode`, and
+    warns when the demo's map isn't the loaded one.
+  - **Checked on a real demo** (pornstar-dhoni, CPM, 14.744):
+    - 2403 frames; the timer ends at 14744 ms;
+    - the CPM one-frame model reproduces 96.2% of the frames from the recorded velocity, keys and yaw (VQ3 only
+      63.6%), so all three are read right;
+    - `tests/dm68.check.mjs` covers this. It needs a demo; demos aren't in git, so it skips without one.
+- **Race timer fix, found with that demo.** `race-timer.js` (and the optimizer's own copy of the rule) assumed a
+  start trigger restarts the timer on every frame the player touches it, so the time ran from the *last* frame
+  inside.
+  - DeFRaG's timer actually reads 0 on the *first* frame touching it and counts on through the 7 frames still
+    inside. That's trigger_multiple's `wait`: after firing it can't fire again for `wait` seconds, default 0.5.
+  - The viewer said 14.688, 56 ms short. It now says 14.744, the demo's own timer to the millisecond, and agrees
+    frame by frame (6.280 at frame 1200).
+  - New `startsTimer`, shared by `raceTime` and the optimizer. `findTimerTriggers` reads `wait`.
+  - What it means for the optimizer: frames before the first touch are free; frames inside the start trigger
+    aren't, except that staying inside refires it every `wait`.
+
+---
+
+## 2026-10-15 (evening) — Stats dashboard: split files, real physics, no lag; viewer trail leak
+
+- **Split `stats.html`** into the markup, `css/stats.css`, `js/stats.js` (page, charts, playback) and
+  `js/run-analysis.js` (the analysis, no DOM, so `tests/run-analysis.check.mjs` can run it).
+- **Physics:** the old analysis was made up. Its "wish angle" was always the velocity + 30°, so efficiency
+  always came out near 100%. Its acceleration was in ups per frame but labelled ups/s, and its ±30 / 45 / 90°
+  "optimal" lines don't depend on speed, though the real angle does. Now each frame is replayed with
+  `strafe.js`'s one-frame Pmove (VQ3 or CPM) from the previous frame's velocity:
+  - **Strafe angle:** the angle between the wish direction (view + keys) and the velocity, against the CGaz
+    best angle `acos((W − A) / v)` and the no-accel angle `acos(W / v)` for that frame's mode, keys and speed.
+  - **Efficiency:** speed gained ÷ what the best yaw short (`bestYaw`, same keys, same side) could have gained,
+    snapping included. It's only given when the model reproduces the frame's real velocity exactly; elsewhere
+    (walls, slopes, jump pads, wrong physics) the frame is left out. A real WASM run on a map came out 99%
+    reproduced. The new "Modelled" tile shows that share.
+  - **Snapping, seen in the charts:** on a straight optimizer run, efficiency is 100% while the angle sits near
+    78° against a CGaz angle of 56°. Velocity snapping makes that yaw faster (vy rounds up 2.505 → 3).
+  - **Other fixes:**
+    - jumps = frames that left the ground with jump held, not jump presses;
+    - Q3 orientation: the path isn't mirrored any more (frame y is −Q3 y);
+    - the yaw compass has 0° = +x and turns counter-clockwise, and it now also shows the velocity and wish
+      directions;
+    - the path and velocity charts use the same scale on both axes;
+    - velocity is the real Pmove velocity (`vx` / `vy`) when the run has it, not the position difference.
+  - The viewer's hand-off now carries the run's physics (`q3StatsRun.physics`). There's a Physics selector to
+    re-analyse.
+- **Lag:**
+  - Every slider step redrew all five charts (`chart.update` × 5, with every point of the run).
+  - Playback ran on a 16 ms `setInterval` advancing one frame per tick, so 1x was really ~0.5x.
+  - The yaw needle had a 0.3 s CSS transition, so it trailed behind.
+  - Now the charts are drawn once per run, and the current frame is drawn on a transparent overlay canvas
+    (about 0.1 ms per step). Playback uses `requestAnimationFrame` in real time (126 frames in 1 s at 1x).
+  - Clicking a chart jumps to that frame.
+- **UI:**
+  - a top bar with the run picker, which loads on select (no Load button);
+  - a sticky playback bar with the keys held;
+  - summary tiles;
+  - a current-frame panel with values that update in place;
+  - responsive charts (they no longer overflow at 500 px fixed);
+  - an explanation under each chart;
+  - phone width works.
+- **Viewer replay lag:**
+  - The trail made a new sphere mesh (geometry + material) every frame and never disposed the old ones. With
+    Trail on (the default), playback and scrubbing leaked GPU buffers and slowed down the longer they ran.
+  - It's now a fixed set of 60 dots sharing one geometry, placed on the last 60 frames. It's correct when
+    scrubbing or playing backwards, and unticking Trail hides it (before, it only hid in first person).
+- `strafe.js`: new `strafeAngles(state, keys)`, the continuous CGaz angles the dashboard plots.
+
+---
+
 ## 2026-10-15 (later) — Repo clean-up; stats dashboard linked from the viewer
 
 - **Removed: `Q3BeamSearch.Console`** (the original C# beam-search experiments).

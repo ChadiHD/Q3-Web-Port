@@ -26,7 +26,8 @@ knowledge that isn't obvious from the code.
 | Engine services the CM needs | `wasm/src/cm/cm_bridge.c` + `wasm/src/cm/qcommon.h` shim |
 | Exposed WASM functions | `wasm/src/wrapper.c` + `EXPORTED_FUNCTIONS` in `wasm/build.ps1` |
 | Route optimisation | `js/waypoint-optimizer.js`, `js/optimizer-worker.js` (worker pool), `wasm/src/odfe/cl_snapyaw.c` (yaw chooser) |
-| Run statistics dashboard | `stats.html` (viewer hand-off: `localStorage` `q3StatsRun`, 📊 Stats in `viewer3d-v2.js`) |
+| Reading `.dm_68` demos | `js/dm68.js` (`parseDemo`, `demoFrames`); `handleQ3Demo` in `viewer3d-v2.js`; `tests/dm68.check.mjs` (needs a demo, skips without) |
+| Run statistics dashboard | `stats.html` (markup), `css/stats.css`, `js/stats.js` (page, charts), `js/run-analysis.js` (per-frame physics analysis); viewer hand-off: `localStorage` `q3StatsRun`, 📊 Stats in `viewer3d-v2.js` |
 | Server endpoints | `Q3BeamSearch/Program.cs` |
 
 ## Environment gotchas (these bit us; they'll bite you)
@@ -102,8 +103,8 @@ knowledge that isn't obvious from the code.
 - Two pages exist (`html/viewer3d-v2.html`, `stats.html`). This is intentional: the 3D
   workbench and the statistics dashboard.
 - The JS collision system (`collision-detection.js`, `slide-move.js`) coexists with the WASM
-  collision model. Intentional — JS handles pre-recorded demo replay; WASM handles live
-  physics. See the design note in
+  collision model. Intentional — JS handles pre-recorded JSON frame replay; WASM handles live
+  physics. (`.dm_68` demos skip both: their positions are the game's own.) See the design note in
   [PHYSICS_AND_COLLISION.md](./PHYSICS_AND_COLLISION.md#design-note-the-js-collision-system-was-kept).
 - `Q3BeamSearch/References/` (local only, not in git) holds the user's oDFe engine tree (built
   separately with MinGW) and Opensource Defrag (the CPM reference). The web build ignores it

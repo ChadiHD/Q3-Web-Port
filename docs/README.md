@@ -35,6 +35,7 @@ static site plus a run list and a map-download proxy.
 - **`html/viewer3d-v2.html`** (`wwwroot/js/viewer3d-v2.js` and its ES modules) — the 3D
   viewer and TAS workbench: scripts, the route optimizer, the frame editor, waypoints. The
   site opens here.
-- **`stats.html`** — the run statistics dashboard (the original v1 page): speed, path,
-  yaw, velocity, acceleration and strafe-efficiency charts, frame by frame. The viewer's
-  **📊 Stats** button opens the loaded run in it.
+- **`stats.html`** (`css/stats.css`, `js/stats.js`, `js/run-analysis.js`) — the run statistics
+  dashboard (the original v1 page): speed, path, strafe angle against CGaz, strafe efficiency
+  against the best yaw (one-frame Pmove with snapping) and velocity charts, frame by frame.
+  The viewer's **📊 Stats** button opens the loaded run in it.

@@ -167,8 +167,10 @@ set cl_scriptRun 0; set fixedtime 0
 echo expected end after <F> frames: origin <x y z>, <N> ups, vz <vz>; scriptpos
 echo expected race time 0:04.328 (...)     // when the run crosses the map's start and stop triggers
 ```
-The race time follows DeFRaG's timer triggers (`wwwroot/js/race-timer.js`): it runs from the last frame touching a
-start trigger to the first frame touching a stop trigger, 8 ms a frame. Compare it with the time DeFRaG prints.
+The race time follows DeFRaG's timer triggers (`wwwroot/js/race-timer.js`). It runs from the first frame touching a
+start trigger to the first frame touching a stop trigger, 8 ms a frame. A trigger_multiple can't fire again until its
+`wait` (default 0.5 s) has passed, so staying in the start trigger restarts the timer only every `wait`. This matches a
+real DeFRaG demo to the millisecond. Compare it with the time DeFRaG prints.
 
 **How exports are built:**
 - **Map name.** `<map>` is the BSP's own name inside the pk3 (`maps/<map>.bsp`), which is what `devmap` takes. dhoni.pk3

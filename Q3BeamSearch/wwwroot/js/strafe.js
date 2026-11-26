@@ -225,6 +225,17 @@ export function bestYaw(state, keys, side, { aim = null, lambda = 0 } = {}) {
     return { yawShort: yawAt((bestFrom + bestTo) >> 1), vel: [outX[bestTo], outY[bestTo]], evals: nEval };
 }
 
+// The continuous CGaz angles between the wish direction and the velocity (radians): `opt`
+// gains the most speed, below `min` nothing is gained (0 while under wishspeed). `speed` is
+// the horizontal speed after friction, before accel. null without move keys or speed.
+export function strafeAngles(state, keys) {
+    const p = prepare(state.vel, state.mode, keys, state.cpm);
+    const v = Math.hypot(p.vx, p.vy);
+    if ((!keys.f && !keys.s) || v < 1) return null;
+    const W = Math.min(Math.hypot(keys.f, keys.s) * p.scale, p.cap), A = p.accel * 0.008 * W;
+    return { speed: v, opt: v > W - A ? Math.acos((W - A) / v) : 0, min: v > W ? Math.acos(W / v) : 0 };
+}
+
 // The continuous CGaz angle (ignores snapping) rounded to a short: +strafebot.
 export function cgazYaw(state, keys, side) {
     const p = prepare(state.vel, state.mode, keys, state.cpm);
