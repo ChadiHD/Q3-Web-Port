@@ -14,9 +14,9 @@ Q3WebPort/
    ├─ References/               ← local only, not in git: oDFe engine, Opensource Defrag
    └─ wwwroot/                  ← ALL the browser code + the WASM build lives here
       ├─ html/viewer3d-v2.html  ← the 3D viewer (the site opens here)
-      ├─ stats.html             ← run statistics dashboard: speed / path / yaw / accel charts
+      ├─ stats.html             ← run statistics dashboard (markup; css/stats.css, js/stats.js)
       ├─ js/                    ← ES modules (see below)
-      ├─ css/
+      ├─ css/                   ← viewer3d-v2.css, stats.css
       ├─ demos/                 ← saved runs (.json) the dashboard lists
       └─ wasm/                  ← Emscripten build of the Q3 physics + collision
          ├─ build.ps1           ← the build script (runs emcc)
@@ -52,10 +52,13 @@ Q3WebPort/
    into the WASM module for physics.
 
 The **statistics dashboard** (`stats.html`, the v1 page) charts a run frame by frame. The
-viewer's **📊 Stats** button hands it the loaded run through `localStorage` (`q3StatsRun`)
-and opens `stats.html?run=viewer`. The dashboard's **3D View** button goes the other way
-(`q3DemoData`). The dashboard's analysis is computed from the positions (heuristic); it
-doesn't run the physics.
+viewer's **📊 Stats** button hands it the loaded run through `localStorage` (`q3StatsRun`:
+`{name, frames, physics}`) and opens `stats.html?run=viewer`. The dashboard's **3D View**
+button goes the other way (`q3DemoData`). Its analysis (`run-analysis.js`) replays every
+frame with `strafe.js`'s one-frame Pmove model from the previous frame's velocity. Where
+the model lands on the frame's real velocity (flat ground, no walls: ~99% of a WASM run),
+it rates the frame against the best yaw short for the same keys. Runs without `vx` / `vy`
+(old saved runs) get the CGaz angles but no efficiency.
 
 The original C# console route optimiser was removed on 2026-10-15. Its search lives on,
 rewritten, in `waypoint-optimizer.js` on the real WASM physics.
@@ -70,11 +73,13 @@ rewritten, in `waypoint-optimizer.js` on the real WASM physics.
 | `slide-move.js` | Q3-style slide/clip-velocity helper used by the JS collision post-pass. |
 | `waypoint-system.js` | Waypoints: numbered balls (radius, height); place / select-and-resize (left click), delete (middle click); hitbox reach check in playback. |
 | `waypoint-optimizer.js` | VQ3 / CPM route optimiser: a strafe controller plus a beam search, on the WASM physics. It runs in `optimizer-worker.js`, which also starts a pool of helper workers (one per core minus one, up to 16), each with its own WASM instance and map. They simulate each leg's candidates in parallel, and the results are merged in job order, so the route is the same as single-threaded. With DeFRaG timer triggers it can finish in the stop trigger and ranks by race time. In CPM it also tries one-key air frames (sidestrafe, air control). |
+| `stats.js`, `run-analysis.js` | The statistics dashboard: page wiring and charts (`stats.js`, Chart.js; the current-frame marker is drawn on an overlay canvas, so scrubbing doesn't redraw the charts), and the per-frame analysis (`run-analysis.js`, no DOM, `tests/run-analysis.check.mjs`). |
 | `strafe.js` | Snap-aware yaw chooser: a bit-exact one-frame Pmove model (VQ3 and CPM), searched over yaw shorts. Its C twin is `cl_snapyaw.c` (one file, in oDFe and in the WASM as `SnapYaw`); the optimizer runs the C one through `PmoveRunner.bestYaw`, the script runner and tests use this one, and `tests/snapyaw-wasm.check.mjs` keeps them picking alike. |
 | `pmove-runner.js` | Steps the WASM Pmove one usercmd at a time (`reset`, `step`, `settle` at the spawn), VQ3 or CPM (`SetPromode`). |
 | `movement-script.js` | Runs cfg movement scripts exactly like the modified oDFe (`docs/SCRIPTING.md`). |
 | `cfg-export.js` | cfg exports for oDFe: as written, or baked per frame with checkpoints. |
-| `race-timer.js` | DeFRaG start / checkpoint / stop triggers (brush bounds) and the race time of a run. |
+| `race-timer.js` | DeFRaG start / checkpoint / stop triggers (brush bounds, `wait`) and the race time of a run: from the first frame touching the start trigger (it refires only after its `wait`, default 0.5 s), checked against a demo's own timer. |
+| `dm68.js` | Quake 3 demo reader (`.dm_68`, protocol 68), ported from oDFe's `msg.c`, `huffman_static.c` and `cl_parse.c`. It gives the server info (map, `df_promode`) and the recording player's playerState per snapshot. `demoFrames` turns those into viewer frames, one per 8 ms: velocity, yaw, ground, the keys from DeFRaG's `ps.stats[13]` and its timer from `stats[8]`. The viewer's 🎬 Demo button loads them as recorded (no re-clip) and sets Physics to the demo's. |
 | `scene-setup.js` | Three.js renderer/camera/lights bootstrap. |
 | `map-render.js` | Builds the Three.js meshes from parsed BSP and the entity markers; triggers at their brush bounds, timer triggers coloured. |
 | `frame-editor.js` | Frame-by-frame input editing. |

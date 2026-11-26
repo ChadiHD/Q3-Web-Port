@@ -22,6 +22,7 @@ import { initThreeJS } from './scene-setup.js';
 import { renderMap, findFirstSpawn, updateEntityVisibility } from './map-render.js';
 import { runScript } from './movement-script.js';
 import { exportBaked, exportScript } from './cfg-export.js';
+import { parseDemo, demoFrames } from './dm68.js';
 
 
 // ═══════════════════════════════════════════════════════════════════════
@@ -181,7 +182,8 @@ function transitionToViewer() {
     V.currentFrames = [];
     V.currentFrame = 0;
     if (V.playerBox) V.playerBox.visible = false;
-    V.trailPoints.forEach(p => V.scene.remove(p));
+    V.trailPoints.forEach(p => { V.scene.remove(p); p.material.dispose(); });
+    V.trailPoints[0]?.geometry.dispose();   // shared by all the dots
     V.trailPoints = [];
     if (V.pathLine) V.pathLine.visible = false;
 
@@ -302,8 +304,8 @@ function updateVisualization() {
     } else V.groundIndicator.visible = false;
 
     // Trail
-    if (!fp && document.getElementById('showTrail')?.checked) updateTrail(fr);
-    V.trailPoints.forEach(p => { p.visible = !fp; });
+    if (!fp && document.getElementById('showTrail')?.checked) updateTrail();
+    else V.trailPoints.forEach(p => { p.visible = false; });
 
     // Waypoint check
     if (V.waypointSystem) V.waypointSystem.checkWaypoint({ x: fr.x, y: fr.y, z: fr.z }, V.currentFrame);
@@ -347,12 +349,23 @@ function setFirstPerson(on) {
     updateVisualization();   // marker / arrow visibility, and the camera (Follow re-centres on the player)
 }
 
-function updateTrail(fr) {
-    if (V.trailPoints.length > 60) { const old = V.trailPoints.shift(); V.scene.remove(old); }
-    const pt = new THREE.Mesh(new THREE.SphereGeometry(2, 8, 8), new THREE.MeshBasicMaterial({ color: 0x4fc3f7, transparent: true, opacity: 0.4 }));
-    pt.position.set(fr.x, fr.z, fr.y);
-    V.trailPoints.push(pt); V.scene.add(pt);
-    V.trailPoints.forEach((p, i) => { p.material.opacity = (i / V.trailPoints.length) * 0.4; });
+// The trail: the last TRAIL frames up to the current one, fading out. A fixed set of dots
+// sharing one geometry, made once and moved, so playback and scrubbing allocate nothing
+// (a new mesh per frame, never disposed, made the player slow down the longer it ran).
+const TRAIL = 60;
+function updateTrail() {
+    if (!V.trailPoints.length) {
+        const geo = new THREE.SphereGeometry(2, 8, 8);
+        for (let i = 0; i < TRAIL; i++) {
+            const pt = new THREE.Mesh(geo, new THREE.MeshBasicMaterial({ color: 0x4fc3f7, transparent: true, opacity: (i / TRAIL) * 0.4 }));
+            V.trailPoints.push(pt); V.scene.add(pt);
+        }
+    }
+    V.trailPoints.forEach((pt, i) => {
+        const fr = V.currentFrames[V.currentFrame - (TRAIL - 1) + i];   // the last dot is the current frame
+        pt.visible = !!fr;
+        if (fr) pt.position.set(fr.x, fr.z, fr.y);
+    });
 }
 
 function updatePath() {
@@ -377,7 +390,7 @@ function updateInfoPanel(fr, phys) {
     if ($('infoTimer'))    $('infoTimer').textContent = timerText(V.currentFrame);
 }
 
-// The DeFRaG race timer at frame i: from the last frame in the start trigger, frozen at the
+// The DeFRaG race timer at frame i: from the frame the start trigger started it, frozen at the
 // first frame in the stop trigger (race-timer.js).
 function timerText(i) {
     const r = V.currentRace;
@@ -495,6 +508,7 @@ function loadFrames(frames, { simulated = false, keepCamera = false } = {}) {
 }
 
 async function handleDemoUpload(file) {
+    if (/\.dm_\d+$/i.test(file.name)) return handleQ3Demo(file);
     try {
         const text = await file.text();
         const data = JSON.parse(text);
@@ -506,6 +520,28 @@ async function handleDemoUpload(file) {
         console.error('[v2] Demo load failed', e);
         toast('Failed to parse demo file');
     }
+}
+
+// A Quake 3 demo (dm68.js): the recording player's movement, as recorded (no re-clip). The
+// Physics selector follows the demo's df_promode, so stats, scripts and the optimizer match it.
+async function handleQ3Demo(file) {
+    let demo, frames;
+    try {
+        demo = parseDemo(await file.arrayBuffer());
+        frames = demoFrames(demo);
+    } catch (e) {
+        console.error('[v2] Demo parse failed', e);
+        toast(`Can't read ${file.name}: ${e.message}`);
+        return;
+    }
+    if (!frames.length) { toast(`${file.name}: no player movement in this demo`); return; }
+    const cpm = demo.info.df_promode === '1', sel = document.getElementById('physicsMode');
+    if (sel && cpm !== V.cpm) { sel.value = cpm ? 'cpm' : 'vq3'; sel.dispatchEvent(new Event('change')); }
+    loadFrames(frames, { simulated: true });
+    const map = demo.info.mapname, loaded = V.currentMapData?.mapName;
+    const last = frames.at(-1).timerMs;
+    toast(`${map || 'Demo'}: ${frames.length} frames, ${cpm ? 'CPM' : 'VQ3'}${last ? `, DeFRaG time ${formatMs(last)}` : ''}` +
+        (map && loaded && map.toLowerCase() !== loaded.toLowerCase() ? `. Recorded on ${map}, but ${loaded} is loaded` : ''));
 }
 
 // ═══════════════════════════════════════════════════════════════════════
@@ -944,7 +980,7 @@ function setupViewerControls() {
     document.getElementById('btnStats')?.addEventListener('click', () => {
         if (!V.currentFrames.length) { toast('No run to show: load a demo, or run a script or the optimizer'); return; }
         try {
-            localStorage.setItem('q3StatsRun', JSON.stringify({ name: `${V.currentMapData?.mapName || 'map'} run`, frames: V.currentFrames }));
+            localStorage.setItem('q3StatsRun', JSON.stringify({ name: `${V.currentMapData?.mapName || 'map'} run`, frames: V.currentFrames, physics: V.cpm ? 'cpm' : 'vq3' }));
         } catch { toast('Run too large to hand to the dashboard'); return; }
         window.open('../stats.html?run=viewer', '_blank');
     });

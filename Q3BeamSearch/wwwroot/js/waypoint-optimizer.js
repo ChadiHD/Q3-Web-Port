@@ -11,14 +11,15 @@
 //   all waypoints reached > fewest frames > highest final speed > fewest jumps.
 // The route starts where a script would in game: at the map spawn, landed and at rest.
 // On a map with DeFRaG timer triggers it can finish in the stop trigger, and "frames" means
-// race frames: from the last frame in the start trigger (frames spent there are free).
+// race frames: from the frame the start trigger starts the timer (race-timer.js; frames
+// before it are free).
 // CPM (DeFRaG df_promode 1, the WASM's pm_promode): ground accel 15, and in the air each frame
 // also tries the strafe key alone (accel 70 up to 30: tight turns, and fast from low speed)
 // and forward alone (air control), keeping whichever keys score best that frame.
 
 import { shortToYaw } from './strafe.js';
 import { PmoveRunner } from './pmove-runner.js';
-import { touches, boxCenter, raceTime, PLAYER_MINS, PLAYER_MAXS } from './race-timer.js';
+import { touches, boxCenter, raceTime, startsTimer, PLAYER_MINS, PLAYER_MAXS } from './race-timer.js';
 
 // VQ3 constants (bg_pmove.c, wrapper.c InitPhysics defaults)
 const DT = 0.008;                      // 125 fps
@@ -64,7 +65,7 @@ const reached = (pos, wp) => wp.box ? touches(wp.box, pos) : hitboxTouches(pos[0
 // How far off a target's centre the origin can pass and still reach it (across, height aside)
 const reachRadius = wp => wp.box ? 0 : wp.r + HALF_WIDTH;
 
-// Frames that count: after the last frame in a start trigger, if one was touched.
+// Frames that count: after the timer started, if a start trigger started it.
 const counted = node => (node.timerStart >= 0 ? node.inputs.length - 1 - node.timerStart : node.inputs.length);
 
 // Beam order: frames so far + time to cover the rest of the route at the current speed.
@@ -166,7 +167,7 @@ export class WaypointOptimizer {
             this.sim.step(st, inp);
             inputs.push(inp);
             if (inp.u) jumps++;
-            if (this.startBoxes.some(b => touches(b, st.pos))) timerStart = inputs.length - 1;
+            if (startsTimer(this.startBoxes, st.pos, inputs.length - 1, timerStart)) timerStart = inputs.length - 1;
             if (reached(st.pos, wp)) return { inputs, jumps, timerStart, pos: [...st.pos], vel: [...st.vel] };
         }
         return null;

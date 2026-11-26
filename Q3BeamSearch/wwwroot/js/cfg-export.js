@@ -40,7 +40,7 @@ function checkpoint(run, frames, what = 'expected') {
 function footer(run, triggers) {
     const race = triggers ? raceTime(run.replay.positions, triggers) : null;
     return [RELEASE, 'set cl_scriptRun 0; set fixedtime 0', checkpoint(run, run.inputs.length, 'expected end'),
-            ...(race?.ms != null ? [`echo expected race time ${formatMs(race.ms)} (start trigger left after frame ${race.start}, stop trigger at frame ${race.stop})`] : [])];
+            ...(race?.ms != null ? [`echo expected race time ${formatMs(race.ms)} (timer started at frame ${race.start}, stop trigger at frame ${race.stop})`] : [])];
 }
 
 // The keys that give one frame's moves under cl_scriptRun (+moveup sends 10, +speed walks at 64).
